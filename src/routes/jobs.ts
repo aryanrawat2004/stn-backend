@@ -1,76 +1,33 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
+import { store } from "../store";
+import { patchEntity } from "../repository";
+import { createCrudRouter } from "./crud";
 
 const router = Router();
+const table = "jobs";
 
-let mockJobs = [
-  {
-    id: "JOB-101",
-    role: "Solar Design Engineer",
-    company: "GreenRay Enterprises",
-    location: "Jaipur, Rajasthan",
-    type: "Full Time",
-    salary: "₹6 - 9 LPA",
-    postedDate: "2026-09-06",
-    applications: 34,
-    status: "Active",
-    featured: true,
-  },
-  {
-    id: "JOB-102",
-    role: "Project Manager — Solar EPC",
-    company: "HelioGrid Renewables",
-    location: "Hyderabad, Telangana",
-    type: "Full Time",
-    salary: "₹12 - 18 LPA",
-    postedDate: "2026-09-05",
-    applications: 28,
-    status: "Active",
-    featured: true,
-  },
-  {
-    id: "JOB-103",
-    role: "BESS Electrical Engineer",
-    company: "Ampere Storage Labs",
-    location: "Bengaluru, Karnataka",
-    type: "Full Time",
-    salary: "₹8 - 12 LPA",
-    postedDate: "2026-09-07",
-    applications: 21,
-    status: "Pending",
-  },
-  {
-    id: "JOB-104",
-    role: "Solar O&M Site Engineer",
-    company: "Orbital Solar Systems",
-    location: "Ahmedabad, Gujarat",
-    type: "Full Time",
-    salary: "₹5 - 7.5 LPA",
-    postedDate: "2026-09-04",
-    applications: 17,
-    status: "Active",
-  },
-];
+const wrap = (fn: (req: Request, res: Response) => Promise<Response | void>) =>
+  (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res)).catch(next);
 
-// GET /api/admin/jobs
-router.get("/", (req: Request, res: Response) => {
-  res.json({ data: mockJobs });
-});
+router.patch("/:id/status", wrap(async (req, res) => {
+  const allowed = ["Pending", "Active", "Closed"];
+  if (!allowed.includes(req.body.status)) return res.status(400).json({ error: "Invalid job status" });
+  const job = await patchEntity(table, store.jobs, req.params.id, { status: req.body.status, updatedAt: new Date().toISOString() });
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json({ data: job });
+}));
 
-// PATCH /api/admin/jobs/:id/status
-router.patch("/:id/status", (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  const jobIndex = mockJobs.findIndex((job) => job.id === id);
+router.patch("/:id/featured", wrap(async (req, res) => {
+  const job = await patchEntity(table, store.jobs, req.params.id, { featured: Boolean(req.body.featured), updatedAt: new Date().toISOString() });
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json({ data: job });
+}));
 
-  if (jobIndex === -1) {
-    return res.status(404).json({ error: "Job not found" });
-  }
-
-  if (status) {
-    mockJobs[jobIndex].status = status;
-  }
-
-  res.json({ data: mockJobs[jobIndex] });
-});
+router.use(createCrudRouter(store.jobs, {
+  prefix: "JOB",
+  entityName: "Job",
+  table,
+  required: ["role", "company", "location", "type", "status"],
+}));
 
 export default router;

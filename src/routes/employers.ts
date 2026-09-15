@@ -1,79 +1,43 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
+import { store } from "../store";
+import { patchEntity } from "../repository";
+import { createCrudRouter } from "./crud";
 
 const router = Router();
+const table = "employers";
 
-// Temporarily use mock data matching INITIAL_ADMIN_EMPLOYERS from frontend
-let mockEmployers = [
-  {
-    id: "EMP-301",
-    companyName: "GreenRay Enterprises",
-    contactPerson: "Rajesh Kumar",
-    email: "rajesh@greenray.in",
-    location: "Jaipur, Rajasthan",
-    jobsPosted: 12,
-    verified: true,
-    joinedDate: "2026-06-10",
-    status: "Approved",
-  },
-  {
-    id: "EMP-302",
-    companyName: "HelioGrid Renewables",
-    contactPerson: "Sonal Gupta",
-    email: "hr@heliogrid.com",
-    location: "Hyderabad, Telangana",
-    jobsPosted: 8,
-    verified: true,
-    joinedDate: "2026-07-01",
-    status: "Approved",
-  },
-  {
-    id: "EMP-303",
-    companyName: "Ampere Storage Labs",
-    contactPerson: "Vikram Shah",
-    email: "careers@amperestorage.com",
-    location: "Bengaluru, Karnataka",
-    jobsPosted: 4,
-    verified: false,
-    joinedDate: "2026-09-01",
-    status: "Pending Verification",
-  },
-  {
-    id: "EMP-304",
-    companyName: "SunPeak Energy",
-    contactPerson: "Meera Nair",
-    email: "contact@sunpeak.in",
-    location: "Kochi, Kerala",
-    jobsPosted: 1,
-    verified: false,
-    joinedDate: "2026-09-07",
-    status: "Pending Verification",
-  },
-];
+const wrap = (fn: (req: Request, res: Response) => Promise<Response | void>) =>
+  (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res)).catch(next);
 
-// GET /api/admin/employers
-router.get("/", (req: Request, res: Response) => {
-  res.json({ data: mockEmployers });
-});
+router.patch("/:id/verify", wrap(async (req, res) => {
+  const current = store.employers.find((item) => item.id === req.params.id);
+  const verified = req.body.verified ?? !(current?.verified ?? false);
+  const employer = await patchEntity(table, store.employers, req.params.id, {
+    verified,
+    status: verified ? "Approved" : "Pending Verification",
+    updatedAt: new Date().toISOString(),
+  });
+  if (!employer) return res.status(404).json({ error: "Employer not found" });
+  res.json({ data: employer });
+}));
 
-// PATCH /api/admin/employers/:id/verify
-router.patch("/:id/verify", (req: Request, res: Response) => {
-  const { id } = req.params;
-  const employerIndex = mockEmployers.findIndex((emp) => emp.id === id);
+router.patch("/:id/status", wrap(async (req, res) => {
+  const allowed = ["Approved", "Pending Verification", "Suspended"];
+  if (!allowed.includes(req.body.status)) return res.status(400).json({ error: "Invalid employer status" });
+  const employer = await patchEntity(table, store.employers, req.params.id, {
+    status: req.body.status,
+    verified: req.body.status === "Approved",
+    updatedAt: new Date().toISOString(),
+  });
+  if (!employer) return res.status(404).json({ error: "Employer not found" });
+  res.json({ data: employer });
+}));
 
-  if (employerIndex === -1) {
-    return res.status(404).json({ error: "Employer not found" });
-  }
-
-  const employer = mockEmployers[employerIndex];
-  const isApproved = employer.status === "Approved";
-
-  mockEmployers[employerIndex] = {
-    ...employer,
-    verified: !isApproved,
-    status: !isApproved ? "Approved" : "Pending Verification",
-  };
-
-  res.json({ data: mockEmployers[employerIndex] });
-});
+router.use(createCrudRouter(store.employers, {
+  prefix: "EMP",
+  entityName: "Employer",
+  table,
+  required: ["companyName", "contactPerson", "email", "location"],
+}));
 
 export default router;
