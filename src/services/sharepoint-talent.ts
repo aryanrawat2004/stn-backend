@@ -38,16 +38,8 @@ const clientSecret = (process.env.SHAREPOINT_CLIENT_SECRET || process.env.MS_CLI
 const siteHost = (process.env.SHAREPOINT_HOST || "mabicons.sharepoint.com").trim();
 const sitePath = (process.env.SHAREPOINT_SITE_PATH || "/sites/Mabicons/recruitment").trim();
 const driveName = (process.env.SHAREPOINT_DRIVE_NAME || "Documents").trim();
-const rootFolder = (process.env.SHAREPOINT_TALENT_FOLDER || "CV Database/Master CV/position wise").trim();
-
-const ALLOWED_TALENT_FOLDERS = [
-  "Solar Electrical Technician",
-  "Solar Sales & Solar Operations CVs",
-] as const;
-
-const normalizedAllowedFolders = new Set(
-  ALLOWED_TALENT_FOLDERS.map((name) => name.trim().toLowerCase()),
-);
+const rootFolder = (process.env.SHAREPOINT_TALENT_FOLDER || "CV Database/Master CV/position wise/Solar").trim();
+const rootFolderName = rootFolder.split("/").filter(Boolean).pop() || "Solar";
 
 export const sharePointTalentConfig = {
   configured: Boolean(tenantId && clientId && clientSecret),
@@ -55,7 +47,8 @@ export const sharePointTalentConfig = {
   sitePath,
   driveName,
   rootFolder,
-  allowedFolders: [...ALLOWED_TALENT_FOLDERS],
+  mode: "single-folder",
+  folderName: rootFolderName,
 };
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -199,11 +192,6 @@ function inferSkills(folder: string) {
   if (lower.includes("sales")) skills.add("Sales");
   if (lower.includes("operation")) skills.add("Operations");
   if (lower.includes("technician")) skills.add("Technician");
-  if (lower.includes("site engineer")) skills.add("Site Engineering");
-  if (lower.includes("construction")) skills.add("Construction");
-  if (lower.includes("supply chain")) skills.add("Supply Chain");
-  if (lower.includes("procurement")) skills.add("Procurement");
-  if (lower.includes("warehouse")) skills.add("Warehouse");
   return Array.from(skills);
 }
 
@@ -215,7 +203,6 @@ async function collectFolderFiles(
 ): Promise<SharePointTalentItem[]> {
   const entries = await listChildren(token, driveId, folderPath);
   const result: SharePointTalentItem[] = [];
-
   const nestedFolders: GraphDriveItem[] = [];
 
   for (const entry of entries) {
@@ -229,8 +216,8 @@ async function collectFolderFiles(
     result.push({
       id: entry.id,
       name: cleanName(entry.name),
-      role: folderName.replace(/\s+CVs?$/i, "").trim(),
-      domain: folderName,
+      role: "Solar Candidate",
+      domain: "Solar",
       location: "India",
       experience: "Not specified",
       skills: inferSkills(folderName),
@@ -262,25 +249,20 @@ export async function listSharePointTalentFolders(force = false): Promise<ShareP
   const { driveId } = await getMetadata(token);
   const entries = await listChildren(token, driveId, rootFolder);
 
-  const folders = entries
-    .filter(
-      (item) =>
-        item.folder && normalizedAllowedFolders.has(item.name.trim().toLowerCase()),
-    )
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      childCount: item.folder?.childCount || 0,
-    }))
-    .sort((a, b) => {
-      const aIndex = ALLOWED_TALENT_FOLDERS.findIndex(
-        (name) => name.toLowerCase() === a.name.toLowerCase(),
-      );
-      const bIndex = ALLOWED_TALENT_FOLDERS.findIndex(
-        (name) => name.toLowerCase() === b.name.toLowerCase(),
-      );
-      return aIndex - bIndex;
-    });
+  const directCvCount = entries.filter(
+    (item) => item.file && /\.(pdf|docx?|rtf)$/i.test(item.name),
+  ).length;
+  const nestedCount = entries
+    .filter((item) => item.folder)
+    .reduce((total, item) => total + (item.folder?.childCount || 0), 0);
+
+  const folders: SharePointTalentFolder[] = [
+    {
+      id: `root:${rootFolder}`,
+      name: rootFolderName,
+      childCount: directCvCount + nestedCount,
+    },
+  ];
 
   foldersCache = { folders, expiresAt: Date.now() + CACHE_TTL_MS };
   return folders;
@@ -290,21 +272,17 @@ export async function loadSharePointTalentFolder(
   folderName: string,
   force = false,
 ): Promise<SharePointTalentItem[]> {
-  const cacheKey = folderName.toLowerCase();
-  if (!normalizedAllowedFolders.has(cacheKey)) {
+  if (folderName.trim().toLowerCase() !== rootFolderName.toLowerCase()) {
     throw new Error(`SharePoint talent folder '${folderName}' is not enabled`);
   }
 
+  const cacheKey = rootFolderName.toLowerCase();
   const cached = folderRecordsCache.get(cacheKey);
   if (!force && cached && cached.expiresAt > Date.now()) return cached.records;
 
-  const folders = await listSharePointTalentFolders(force);
-  const folder = folders.find((item) => item.name.toLowerCase() === cacheKey);
-  if (!folder) throw new Error(`SharePoint talent folder '${folderName}' was not found`);
-
   const token = await getToken();
   const { driveId } = await getMetadata(token);
-  const records = await collectFolderFiles(token, driveId, `${rootFolder}/${folder.name}`, folder.name);
+  const records = await collectFolderFiles(token, driveId, rootFolder, rootFolderName);
 
   folderRecordsCache.set(cacheKey, {
     records,
@@ -315,12 +293,5 @@ export async function loadSharePointTalentFolder(
 }
 
 export async function loadSharePointTalent(force = false) {
-  const folders = await listSharePointTalentFolders(force);
-  const all: SharePointTalentItem[] = [];
-
-  for (const folder of folders) {
-    all.push(...(await loadSharePointTalentFolder(folder.name, force)));
-  }
-
-  return all;
+  return loadSharePointTalentFolder(rootFolderName, force);
 }
