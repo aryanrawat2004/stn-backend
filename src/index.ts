@@ -14,8 +14,10 @@ import applicationsRouter from "./routes/applications";
 import dashboardRouter from "./routes/dashboard";
 import analyticsRouter from "./routes/analytics";
 import verificationRouter from "./routes/verification";
+import settingsRouter from "./routes/settings";
 
 import { swaggerSpec } from "./swagger";
+import { databaseMode } from "./db";
 
 dotenv.config();
 
@@ -46,7 +48,9 @@ app.use(
 app.use("/api/admin/dashboard", dashboardRouter);
 app.use("/api/admin/jobs", jobsRouter);
 app.use("/api/admin/candidates", candidatesRouter);
+app.use("/api/admin/job-seekers", candidatesRouter);
 app.use("/api/admin/employers", employersRouter);
+app.use("/api/admin/recruiters", employersRouter);
 app.use("/api/admin/companies", companiesRouter);
 app.use("/api/admin/categories", categoriesRouter);
 app.use("/api/admin/ambassadors", ambassadorsRouter);
@@ -54,11 +58,13 @@ app.use("/api/admin/applications", applicationsRouter);
 app.use("/api/admin/activities", activitiesRouter);
 app.use("/api/admin/analytics", analyticsRouter);
 app.use("/api/admin/verification", verificationRouter);
+app.use("/api/admin/settings", settingsRouter);
 
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "SolarNaukri Backend",
+    database: databaseMode,
     timestamp: new Date().toISOString(),
   });
 });
@@ -74,6 +80,7 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🗄️ Database mode: ${databaseMode}`);
   console.log(`📚 Swagger Docs: http://localhost:${PORT}/api-docs`);
   console.log(`📄 OpenAPI JSON: http://localhost:${PORT}/api-docs.json`);
 });
