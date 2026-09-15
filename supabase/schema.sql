@@ -9,6 +9,30 @@ create table if not exists jobs (
   applications integer default 0,
   status text not null default 'Pending',
   featured boolean default false,
+  "workMode" text,
+  experience text,
+  segment text,
+  skills text,
+  description text,
+  "projectScope" text,
+  "projectCapacity" text,
+  responsibilities text,
+  requirements text,
+  tools text,
+  "officeAddress" text,
+  "mapUrl" text,
+  "recruiterName" text,
+  "recruiterDesignation" text,
+  "recruiterEmail" text,
+  "recruiterPhone" text,
+  "targetStartDate" text,
+  "selectionProcess" text,
+  "companyDescription" text,
+  "companyWebsite" text,
+  "companySize" text,
+  "companyHeadquarters" text,
+  perks text,
+  "applicationEmail" text,
   "createdAt" timestamptz default now(),
   "updatedAt" timestamptz default now()
 );
@@ -155,6 +179,17 @@ create table if not exists activities (
   "updatedAt" timestamptz default now()
 );
 
+create table if not exists settings (
+  id text primary key default 'platform',
+  "siteName" text default 'SolarNaukri',
+  "contactEmail" text default 'admin@solarnaukri.com',
+  "emailAlerts" boolean default true,
+  "autoApproveVerified" boolean default false,
+  "weeklyDigest" boolean default true,
+  "createdAt" timestamptz default now(),
+  "updatedAt" timestamptz default now()
+);
+
 create index if not exists idx_jobs_status on jobs(status);
 create index if not exists idx_jobs_company on jobs(company);
 create index if not exists idx_candidates_email on candidates(email);
@@ -162,3 +197,5 @@ create index if not exists idx_employers_email on employers(email);
 create index if not exists idx_companies_status on companies(status);
 create index if not exists idx_applications_job on applications("jobId");
 create index if not exists idx_applications_candidate on applications("candidateId");
+
+insert into settings (id) values ('platform') on conflict (id) do nothing;
