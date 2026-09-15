@@ -1,12 +1,13 @@
 {
   "name": "stn-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "SolarNaukri backend API",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "ts-node src/index.ts",
-    "dev": "nodemon src/index.ts",
+    "start": "ts-node --prefer-ts-exts src/index.ts",
+    "dev": "nodemon --exec \"ts-node --prefer-ts-exts\" src/index.ts",
     "build": "tsc",
+    "start:prod": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
