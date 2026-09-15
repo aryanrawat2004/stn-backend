@@ -26,9 +26,9 @@ export type SharePointTalentItem = {
   source: "sharepoint";
 };
 
-const tenantId = process.env.MS_TENANT_ID?.trim();
-const clientId = process.env.MS_CLIENT_ID?.trim();
-const clientSecret = process.env.MS_CLIENT_SECRET?.trim();
+const tenantId = (process.env.SHAREPOINT_TENANT_ID || process.env.MS_TENANT_ID)?.trim();
+const clientId = (process.env.SHAREPOINT_CLIENT_ID || process.env.MS_CLIENT_ID)?.trim();
+const clientSecret = (process.env.SHAREPOINT_CLIENT_SECRET || process.env.MS_CLIENT_SECRET)?.trim();
 const siteHost = (process.env.SHAREPOINT_HOST || "mabicons.sharepoint.com").trim();
 const sitePath = (process.env.SHAREPOINT_SITE_PATH || "/sites/Mabicons/recruitment").trim();
 const driveName = (process.env.SHAREPOINT_DRIVE_NAME || "Documents").trim();
