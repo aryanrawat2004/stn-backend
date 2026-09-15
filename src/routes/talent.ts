@@ -66,7 +66,30 @@ function inferWorkType(item: SharePointTalentItem): Exclude<WorkTypeFilter, "all
   return "unknown";
 }
 
-function scoreRecord(item: SharePointTalentItem, search: string) {
+function tokenize(value: string) {
+  const stop = new Set([
+    "solar",
+    "and",
+    "the",
+    "for",
+    "with",
+    "engineer",
+    "executive",
+    "manager",
+    "candidate",
+    "cv",
+    "resume",
+    "senior",
+    "junior",
+  ]);
+
+  return normalise(value)
+    .split(/[^a-z0-9+#.-]+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length > 1 && !stop.has(term));
+}
+
+function scoreSearch(item: SharePointTalentItem, search: string) {
   if (!search) return 0;
   const terms = search.split(/\s+/).filter(Boolean);
   let score = 0;
@@ -82,6 +105,68 @@ function scoreRecord(item: SharePointTalentItem, search: string) {
   }
 
   return score;
+}
+
+function roleMatchScore(item: SharePointTalentItem, jobRole: string) {
+  if (!jobRole) return { score: 0, reasons: [] as string[] };
+
+  const role = normalise(jobRole);
+  const terms = tokenize(jobRole);
+  const roleText = normalise(item.role);
+  const nameText = normalise(item.name);
+  const fileText = normalise(item.fileName);
+  const folderText = normalise(item.folderName);
+  const skillText = item.skills.map(normalise).join(" ");
+  const haystack = [roleText, nameText, fileText, folderText, skillText, normalise(item.domain)].join(" ");
+
+  let score = 0;
+  const reasons: string[] = [];
+
+  if (role && (roleText.includes(role) || fileText.includes(role) || nameText.includes(role))) {
+    score += 45;
+    reasons.push("Exact or near-exact role wording found");
+  }
+
+  const matchedTerms = terms.filter((term) => haystack.includes(term));
+  if (terms.length) {
+    const coverage = matchedTerms.length / terms.length;
+    score += Math.round(coverage * 35);
+    if (matchedTerms.length) reasons.push(`${matchedTerms.length}/${terms.length} role keywords matched`);
+  }
+
+  const solarSignals = ["solar", "pv", "epc", "bess", "scada", "rooftop", "electrical", "sales", "operation", "technician", "design"];
+  const roleSignals = solarSignals.filter((term) => role.includes(term));
+  const matchingSignals = roleSignals.filter((term) => haystack.includes(term));
+  if (roleSignals.length) {
+    score += Math.round((matchingSignals.length / roleSignals.length) * 20);
+    if (matchingSignals.length) reasons.push(`Solar domain signals: ${matchingSignals.join(", ")}`);
+  }
+
+  return { score: Math.min(100, score), reasons };
+}
+
+function experienceFitScore(item: SharePointTalentItem, requested: ExperienceFilter) {
+  if (requested === "all") return { score: 0, reason: "" };
+  const bucket = experienceBucket(item);
+  if (bucket === requested) return { score: 15, reason: "Experience range matches" };
+  if (bucket === "unknown") return { score: 0, reason: "" };
+  return { score: 2, reason: "" };
+}
+
+function workTypeFitScore(item: SharePointTalentItem, requested: WorkTypeFilter) {
+  if (requested === "all") return { score: 0, reason: "" };
+  const inferred = inferWorkType(item);
+  if (inferred === requested) return { score: 8, reason: "Work preference matches" };
+  return { score: 0, reason: "" };
+}
+
+function locationFitScore(item: SharePointTalentItem, requested: string) {
+  if (!requested || requested === "all") return { score: 0, reason: "" };
+  const candidateLocation = normalise(item.location);
+  if (candidateLocation === requested || candidateLocation.includes(requested) || requested.includes(candidateLocation)) {
+    return { score: 12, reason: "Location matches" };
+  }
+  return { score: 0, reason: "" };
 }
 
 router.get("/status", (_req, res) => {
@@ -101,12 +186,15 @@ router.get("/folders", async (req, res, next) => {
 router.get("/sharepoint", async (req, res, next) => {
   try {
     const search = normalise(req.query.search);
+    const jobRole = String(req.query.jobRole || "").trim();
     const folder = String(req.query.folder || "").trim();
     const experience = (normalise(req.query.experience) || "all") as ExperienceFilter;
     const workType = (normalise(req.query.workType) || "all") as WorkTypeFilter;
     const location = normalise(req.query.location) || "all";
     const sort = (normalise(req.query.sort) || "match") as SortMode;
-    const limit = Math.max(0, Math.min(1000, Number(req.query.limit || 0) || 0));
+    const top = String(req.query.top || "") === "1";
+    const requestedLimit = Number(req.query.limit || 0) || 0;
+    const limit = top ? 10 : Math.max(0, Math.min(1000, requestedLimit));
     const force = String(req.query.refresh || "") === "1";
 
     const records = folder
@@ -128,21 +216,41 @@ router.get("/sharepoint", async (req, res, next) => {
           .join(" ")
           .toLowerCase();
 
+        const roleMatch = roleMatchScore(item, jobRole);
+        const expFit = experienceFitScore(item, experience);
+        const workFit = workTypeFitScore(item, workType);
+        const locationFit = locationFitScore(item, location);
+        const keywordScore = scoreSearch(item, search);
+        const reasons = [
+          ...roleMatch.reasons,
+          expFit.reason,
+          workFit.reason,
+          locationFit.reason,
+        ].filter(Boolean);
+
+        const weightedScore = Math.min(
+          100,
+          roleMatch.score + expFit.score + workFit.score + locationFit.score + Math.min(10, keywordScore),
+        );
+
         return {
           item,
-          score: scoreRecord(item, search),
+          score: jobRole ? weightedScore : keywordScore,
+          matchPercent: jobRole ? weightedScore : Math.min(100, keywordScore * 5),
+          reasons,
           bucket: experienceBucket(item),
           inferredWorkType: inferWorkType(item),
           haystack,
         };
       })
-      .filter(({ item, bucket, inferredWorkType, haystack }) => {
+      .filter(({ bucket, inferredWorkType, haystack, score }) => {
         const terms = search.split(/\s+/).filter(Boolean);
         const matchesSearch = !terms.length || terms.every((term) => haystack.includes(term));
         const matchesExperience = experience === "all" || bucket === experience;
         const matchesWorkType = workType === "all" || inferredWorkType === workType;
-        const matchesLocation = location === "all" || normalise(item.location) === location;
-        return matchesSearch && matchesExperience && matchesWorkType && matchesLocation;
+        const matchesLocation = location === "all" || haystack.includes(location);
+        const matchesRole = !jobRole || score > 0;
+        return matchesSearch && matchesExperience && matchesWorkType && matchesLocation && matchesRole;
       });
 
     ranked.sort((a, b) => {
@@ -156,9 +264,11 @@ router.get("/sharepoint", async (req, res, next) => {
 
     const total = ranked.length;
     const selected = limit ? ranked.slice(0, limit) : ranked;
-    const data = selected.map(({ item, score, inferredWorkType, bucket }) => ({
+    const data = selected.map(({ item, score, matchPercent, reasons, inferredWorkType, bucket }) => ({
       ...item,
       matchScore: score,
+      matchPercent,
+      matchReasons: reasons,
       inferredWorkType,
       experienceBucket: bucket,
     }));
@@ -174,7 +284,7 @@ router.get("/sharepoint", async (req, res, next) => {
         folders,
         locations,
         selectedFolder: folder || null,
-        filters: { search, experience, workType, location, sort, limit },
+        filters: { search, jobRole, experience, workType, location, sort, limit, top },
         source: "sharepoint",
       },
     });
