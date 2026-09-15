@@ -15,11 +15,15 @@ function normalizeId(id: RouteId): string {
   return Array.isArray(id) ? id[0] ?? "" : id;
 }
 
+export function resolveTableName(table: string): string {
+  return table.startsWith("sn_") ? table : `sn_${table}`;
+}
+
 export async function listEntities(table: string, fallback: Entity[], options: QueryOptions = {}) {
   let rows: Entity[];
 
   if (supabase) {
-    const { data, error } = await supabase.from(table).select("*");
+    const { data, error } = await supabase.from(resolveTableName(table)).select("*");
     if (error) throw error;
     rows = (data || []) as Entity[];
   } else {
@@ -58,7 +62,7 @@ export async function getEntity(table: string, fallback: Entity[], id: RouteId) 
   const entityId = normalizeId(id);
 
   if (supabase) {
-    const { data, error } = await supabase.from(table).select("*").eq("id", entityId).maybeSingle();
+    const { data, error } = await supabase.from(resolveTableName(table)).select("*").eq("id", entityId).maybeSingle();
     if (error) throw error;
     return (data || null) as Entity | null;
   }
@@ -67,7 +71,7 @@ export async function getEntity(table: string, fallback: Entity[], id: RouteId) 
 
 export async function createEntity(table: string, fallback: Entity[], item: Entity) {
   if (supabase) {
-    const { data, error } = await supabase.from(table).insert(item).select().single();
+    const { data, error } = await supabase.from(resolveTableName(table)).insert(item).select().single();
     if (error) throw error;
     return data as Entity;
   }
@@ -79,7 +83,7 @@ export async function replaceEntity(table: string, fallback: Entity[], id: Route
   const entityId = normalizeId(id);
 
   if (supabase) {
-    const { data, error } = await supabase.from(table).upsert({ ...item, id: entityId }).select().single();
+    const { data, error } = await supabase.from(resolveTableName(table)).upsert({ ...item, id: entityId }).select().single();
     if (error) throw error;
     return data as Entity;
   }
@@ -93,7 +97,7 @@ export async function patchEntity(table: string, fallback: Entity[], id: RouteId
   const entityId = normalizeId(id);
 
   if (supabase) {
-    const { data, error } = await supabase.from(table).update(patch).eq("id", entityId).select().maybeSingle();
+    const { data, error } = await supabase.from(resolveTableName(table)).update(patch).eq("id", entityId).select().maybeSingle();
     if (error) throw error;
     return (data || null) as Entity | null;
   }
@@ -107,7 +111,7 @@ export async function deleteEntity(table: string, fallback: Entity[], id: RouteI
   const entityId = normalizeId(id);
 
   if (supabase) {
-    const { data, error } = await supabase.from(table).delete().eq("id", entityId).select().maybeSingle();
+    const { data, error } = await supabase.from(resolveTableName(table)).delete().eq("id", entityId).select().maybeSingle();
     if (error) throw error;
     return (data || null) as Entity | null;
   }
