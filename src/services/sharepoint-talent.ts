@@ -102,14 +102,16 @@ async function getDriveId(token: string, siteId: string) {
   return drive.id;
 }
 
-async function listAll(token: string, url: string) {
+async function listAll(token: string, url: string): Promise<GraphDriveItem[]> {
   const items: GraphDriveItem[] = [];
-  let next: string | undefined = url;
-  while (next) {
-    const page = await graphJson<GraphListResponse>(token, next);
-    items.push(...(page.value || []));
-    next = page["@odata.nextLink"];
+  let nextUrl: string | undefined = url;
+
+  while (nextUrl) {
+    const responsePage: GraphListResponse = await graphJson<GraphListResponse>(token, nextUrl);
+    items.push(...(responsePage.value ?? []));
+    nextUrl = responsePage["@odata.nextLink"];
   }
+
   return items;
 }
 
