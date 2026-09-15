@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { store } from "../store";
 import { patchEntity } from "../repository";
+import { requireWriteRoles } from "../middleware/rbac";
 import { createCrudRouter } from "./crud";
 
 const router = Router();
@@ -8,6 +9,10 @@ const table = "jobs";
 
 const wrap = (fn: (req: Request, res: Response) => Promise<Response | void>) =>
   (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res)).catch(next);
+
+// Reading job data stays public. Any create/edit/delete/status change must be
+// performed by a recruiter, campus ambassador, or admin.
+router.use(requireWriteRoles("recruiter", "ambassador", "admin"));
 
 router.patch("/:id/status", wrap(async (req, res) => {
   const allowed = ["Pending", "Active", "Closed"];
