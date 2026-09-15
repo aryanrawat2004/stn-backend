@@ -1,30 +1,34 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { store } from "../store";
+import { patchEntity } from "../repository";
 import { createCrudRouter } from "./crud";
 
 const router = Router();
+const table = "candidates";
 
-router.patch("/:id/verify", (req: Request, res: Response) => {
-  const candidate = store.candidates.find((item) => item.id === req.params.id);
+const wrap = (fn: (req: Request, res: Response) => Promise<Response | void>) =>
+  (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res)).catch(next);
+
+router.patch("/:id/verify", wrap(async (req, res) => {
+  const current = store.candidates.find((item) => item.id === req.params.id);
+  const verified = req.body.verified ?? !(current?.verified ?? false);
+  const candidate = await patchEntity(table, store.candidates, req.params.id, { verified, updatedAt: new Date().toISOString() });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
-  candidate.verified = req.body.verified ?? !candidate.verified;
-  candidate.updatedAt = new Date().toISOString();
   res.json({ data: candidate });
-});
+}));
 
-router.patch("/:id/status", (req: Request, res: Response) => {
-  const candidate = store.candidates.find((item) => item.id === req.params.id);
-  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+router.patch("/:id/status", wrap(async (req, res) => {
   const allowed = ["Active", "Suspended"];
   if (!allowed.includes(req.body.status)) return res.status(400).json({ error: "Invalid candidate status" });
-  candidate.accountStatus = req.body.status;
-  candidate.updatedAt = new Date().toISOString();
+  const candidate = await patchEntity(table, store.candidates, req.params.id, { accountStatus: req.body.status, updatedAt: new Date().toISOString() });
+  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
   res.json({ data: candidate });
-});
+}));
 
 router.use(createCrudRouter(store.candidates, {
   prefix: "CAN",
   entityName: "Candidate",
+  table,
   required: ["name", "email", "phone", "role", "location"],
 }));
 
