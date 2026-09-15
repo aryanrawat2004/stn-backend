@@ -9,6 +9,12 @@ export interface QueryOptions {
   sort?: string;
 }
 
+type RouteId = string | string[];
+
+function normalizeId(id: RouteId): string {
+  return Array.isArray(id) ? id[0] ?? "" : id;
+}
+
 export async function listEntities(table: string, fallback: Entity[], options: QueryOptions = {}) {
   let rows: Entity[];
 
@@ -48,13 +54,15 @@ export async function listEntities(table: string, fallback: Entity[], options: Q
   };
 }
 
-export async function getEntity(table: string, fallback: Entity[], id: string) {
+export async function getEntity(table: string, fallback: Entity[], id: RouteId) {
+  const entityId = normalizeId(id);
+
   if (supabase) {
-    const { data, error } = await supabase.from(table).select("*").eq("id", id).maybeSingle();
+    const { data, error } = await supabase.from(table).select("*").eq("id", entityId).maybeSingle();
     if (error) throw error;
     return (data || null) as Entity | null;
   }
-  return fallback.find((item) => item.id === id) || null;
+  return fallback.find((item) => item.id === entityId) || null;
 }
 
 export async function createEntity(table: string, fallback: Entity[], item: Entity) {
@@ -67,37 +75,43 @@ export async function createEntity(table: string, fallback: Entity[], item: Enti
   return item;
 }
 
-export async function replaceEntity(table: string, fallback: Entity[], id: string, item: Entity) {
+export async function replaceEntity(table: string, fallback: Entity[], id: RouteId, item: Entity) {
+  const entityId = normalizeId(id);
+
   if (supabase) {
-    const { data, error } = await supabase.from(table).upsert({ ...item, id }).select().single();
+    const { data, error } = await supabase.from(table).upsert({ ...item, id: entityId }).select().single();
     if (error) throw error;
     return data as Entity;
   }
-  const index = fallback.findIndex((entry) => entry.id === id);
+  const index = fallback.findIndex((entry) => entry.id === entityId);
   if (index === -1) return null;
-  fallback[index] = { ...item, id };
+  fallback[index] = { ...item, id: entityId };
   return fallback[index];
 }
 
-export async function patchEntity(table: string, fallback: Entity[], id: string, patch: Record<string, any>) {
+export async function patchEntity(table: string, fallback: Entity[], id: RouteId, patch: Record<string, any>) {
+  const entityId = normalizeId(id);
+
   if (supabase) {
-    const { data, error } = await supabase.from(table).update(patch).eq("id", id).select().maybeSingle();
+    const { data, error } = await supabase.from(table).update(patch).eq("id", entityId).select().maybeSingle();
     if (error) throw error;
     return (data || null) as Entity | null;
   }
-  const index = fallback.findIndex((entry) => entry.id === id);
+  const index = fallback.findIndex((entry) => entry.id === entityId);
   if (index === -1) return null;
-  fallback[index] = { ...fallback[index], ...patch, id };
+  fallback[index] = { ...fallback[index], ...patch, id: entityId };
   return fallback[index];
 }
 
-export async function deleteEntity(table: string, fallback: Entity[], id: string) {
+export async function deleteEntity(table: string, fallback: Entity[], id: RouteId) {
+  const entityId = normalizeId(id);
+
   if (supabase) {
-    const { data, error } = await supabase.from(table).delete().eq("id", id).select().maybeSingle();
+    const { data, error } = await supabase.from(table).delete().eq("id", entityId).select().maybeSingle();
     if (error) throw error;
     return (data || null) as Entity | null;
   }
-  const index = fallback.findIndex((entry) => entry.id === id);
+  const index = fallback.findIndex((entry) => entry.id === entityId);
   if (index === -1) return null;
   const [deleted] = fallback.splice(index, 1);
   return deleted;
