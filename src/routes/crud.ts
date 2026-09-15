@@ -1,5 +1,6 @@
+import { randomUUID } from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
-import { Entity, nextId } from "../store";
+import { Entity } from "../store";
 import {
   createEntity,
   deleteEntity,
@@ -22,6 +23,10 @@ function asyncHandler(
   return (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(handler(req, res, next)).catch(next);
   };
+}
+
+function generateId(prefix: string) {
+  return `${prefix}-${randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
 export function createCrudRouter(items: Entity[], options: CrudOptions) {
@@ -64,7 +69,7 @@ export function createCrudRouter(items: Entity[], options: CrudOptions) {
       const now = new Date().toISOString();
       const item: Entity = {
         ...req.body,
-        id: req.body.id || nextId(prefix, items),
+        id: req.body.id || generateId(prefix),
         createdAt: req.body.createdAt || now,
         updatedAt: now,
       };
