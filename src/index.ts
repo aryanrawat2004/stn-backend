@@ -16,6 +16,7 @@ import analyticsRouter from "./routes/analytics";
 import verificationRouter from "./routes/verification";
 import settingsRouter from "./routes/settings";
 import talentRouter from "./routes/talent";
+import { requireWriteRoles } from "./middleware/rbac";
 
 import { swaggerSpec } from "./swagger";
 import { databaseMode, databaseConfig, supabase } from "./db";
@@ -25,6 +26,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const isDevelopment = process.env.NODE_ENV !== "production";
+const adminWriteGuard = requireWriteRoles("admin");
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
@@ -47,21 +49,28 @@ app.use(
   }),
 );
 
+// Public/read-only APIs.
 app.use("/api/talent", talentRouter);
 app.use("/api/admin/dashboard", dashboardRouter);
-app.use("/api/admin/jobs", jobsRouter);
-app.use("/api/admin/candidates", candidatesRouter);
-app.use("/api/admin/job-seekers", candidatesRouter);
-app.use("/api/admin/employers", employersRouter);
-app.use("/api/admin/recruiters", employersRouter);
-app.use("/api/admin/companies", companiesRouter);
-app.use("/api/admin/categories", categoriesRouter);
-app.use("/api/admin/ambassadors", ambassadorsRouter);
-app.use("/api/admin/applications", applicationsRouter);
-app.use("/api/admin/activities", activitiesRouter);
 app.use("/api/admin/analytics", analyticsRouter);
-app.use("/api/admin/verification", verificationRouter);
-app.use("/api/admin/settings", settingsRouter);
+
+// Job reads remain public, while the jobs router itself protects every write
+// for recruiter / campus ambassador / admin roles.
+app.use("/api/admin/jobs", jobsRouter);
+
+// Admin management reads stay available to the existing dashboard. Any
+// mutation (POST/PUT/PATCH/DELETE) requires an authenticated admin role.
+app.use("/api/admin/candidates", adminWriteGuard, candidatesRouter);
+app.use("/api/admin/job-seekers", adminWriteGuard, candidatesRouter);
+app.use("/api/admin/employers", adminWriteGuard, employersRouter);
+app.use("/api/admin/recruiters", adminWriteGuard, employersRouter);
+app.use("/api/admin/companies", adminWriteGuard, companiesRouter);
+app.use("/api/admin/categories", adminWriteGuard, categoriesRouter);
+app.use("/api/admin/ambassadors", adminWriteGuard, ambassadorsRouter);
+app.use("/api/admin/applications", adminWriteGuard, applicationsRouter);
+app.use("/api/admin/activities", adminWriteGuard, activitiesRouter);
+app.use("/api/admin/verification", adminWriteGuard, verificationRouter);
+app.use("/api/admin/settings", adminWriteGuard, settingsRouter);
 
 app.get("/health", (_req, res) => {
   res.json({
