@@ -1,79 +1,34 @@
 import { Router, Request, Response } from "express";
+import { store } from "../store";
+import { createCrudRouter } from "./crud";
 
 const router = Router();
 
-// Temporarily use mock data matching INITIAL_ADMIN_EMPLOYERS from frontend
-let mockEmployers = [
-  {
-    id: "EMP-301",
-    companyName: "GreenRay Enterprises",
-    contactPerson: "Rajesh Kumar",
-    email: "rajesh@greenray.in",
-    location: "Jaipur, Rajasthan",
-    jobsPosted: 12,
-    verified: true,
-    joinedDate: "2026-06-10",
-    status: "Approved",
-  },
-  {
-    id: "EMP-302",
-    companyName: "HelioGrid Renewables",
-    contactPerson: "Sonal Gupta",
-    email: "hr@heliogrid.com",
-    location: "Hyderabad, Telangana",
-    jobsPosted: 8,
-    verified: true,
-    joinedDate: "2026-07-01",
-    status: "Approved",
-  },
-  {
-    id: "EMP-303",
-    companyName: "Ampere Storage Labs",
-    contactPerson: "Vikram Shah",
-    email: "careers@amperestorage.com",
-    location: "Bengaluru, Karnataka",
-    jobsPosted: 4,
-    verified: false,
-    joinedDate: "2026-09-01",
-    status: "Pending Verification",
-  },
-  {
-    id: "EMP-304",
-    companyName: "SunPeak Energy",
-    contactPerson: "Meera Nair",
-    email: "contact@sunpeak.in",
-    location: "Kochi, Kerala",
-    jobsPosted: 1,
-    verified: false,
-    joinedDate: "2026-09-07",
-    status: "Pending Verification",
-  },
-];
-
-// GET /api/admin/employers
-router.get("/", (req: Request, res: Response) => {
-  res.json({ data: mockEmployers });
-});
-
-// PATCH /api/admin/employers/:id/verify
 router.patch("/:id/verify", (req: Request, res: Response) => {
-  const { id } = req.params;
-  const employerIndex = mockEmployers.findIndex((emp) => emp.id === id);
-
-  if (employerIndex === -1) {
-    return res.status(404).json({ error: "Employer not found" });
-  }
-
-  const employer = mockEmployers[employerIndex];
-  const isApproved = employer.status === "Approved";
-
-  mockEmployers[employerIndex] = {
-    ...employer,
-    verified: !isApproved,
-    status: !isApproved ? "Approved" : "Pending Verification",
-  };
-
-  res.json({ data: mockEmployers[employerIndex] });
+  const employer = store.employers.find((item) => item.id === req.params.id);
+  if (!employer) return res.status(404).json({ error: "Employer not found" });
+  const verified = req.body.verified ?? !employer.verified;
+  employer.verified = Boolean(verified);
+  employer.status = employer.verified ? "Approved" : "Pending Verification";
+  employer.updatedAt = new Date().toISOString();
+  res.json({ data: employer });
 });
+
+router.patch("/:id/status", (req: Request, res: Response) => {
+  const employer = store.employers.find((item) => item.id === req.params.id);
+  if (!employer) return res.status(404).json({ error: "Employer not found" });
+  const allowed = ["Approved", "Pending Verification", "Suspended"];
+  if (!allowed.includes(req.body.status)) return res.status(400).json({ error: "Invalid employer status" });
+  employer.status = req.body.status;
+  employer.verified = req.body.status === "Approved";
+  employer.updatedAt = new Date().toISOString();
+  res.json({ data: employer });
+});
+
+router.use(createCrudRouter(store.employers, {
+  prefix: "EMP",
+  entityName: "Employer",
+  required: ["companyName", "contactPerson", "email", "location"],
+}));
 
 export default router;
