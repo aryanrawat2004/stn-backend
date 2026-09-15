@@ -15,6 +15,7 @@ import dashboardRouter from "./routes/dashboard";
 import analyticsRouter from "./routes/analytics";
 import verificationRouter from "./routes/verification";
 import settingsRouter from "./routes/settings";
+import talentRouter from "./routes/talent";
 
 import { swaggerSpec } from "./swagger";
 import { databaseMode, databaseConfig, supabase } from "./db";
@@ -46,6 +47,7 @@ app.use(
   }),
 );
 
+app.use("/api/talent", talentRouter);
 app.use("/api/admin/dashboard", dashboardRouter);
 app.use("/api/admin/jobs", jobsRouter);
 app.use("/api/admin/candidates", candidatesRouter);
@@ -141,4 +143,5 @@ app.listen(PORT, () => {
   console.log(`📚 Swagger Docs: http://localhost:${PORT}/api-docs`);
   console.log(`📄 OpenAPI JSON: http://localhost:${PORT}/api-docs.json`);
   console.log(`🩺 DB diagnostics: http://localhost:${PORT}/health/db`);
+  console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
 });
