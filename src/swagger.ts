@@ -210,11 +210,24 @@ function crudPaths(base: string, tag: string) {
   };
 }
 
+const settingsRequest = {
+  type: "object",
+  properties: {
+    siteName: { type: "string", example: "SolarNaukri" },
+    contactEmail: { type: "string", format: "email" },
+    emailAlerts: { type: "boolean" },
+    autoApproveVerified: { type: "boolean" },
+    weeklyDigest: { type: "boolean" },
+  },
+};
+
 const paths: Record<string, any> = {
   "/health": simpleGet("Health", "Health check"),
   ...crudPaths("/api/admin/jobs", "Jobs"),
   ...crudPaths("/api/admin/candidates", "Candidates"),
+  ...crudPaths("/api/admin/job-seekers", "Job Seekers"),
   ...crudPaths("/api/admin/employers", "Employers"),
+  ...crudPaths("/api/admin/recruiters", "Recruiters"),
   ...crudPaths("/api/admin/companies", "Companies"),
   ...crudPaths("/api/admin/categories", "Categories"),
   ...crudPaths("/api/admin/ambassadors", "Ambassadors"),
@@ -300,6 +313,32 @@ const paths: Record<string, any> = {
       },
     },
   },
+
+  "/api/admin/settings": {
+    get: {
+      tags: ["Settings"],
+      summary: "Get platform settings",
+      responses: { "200": { description: "Settings returned" } },
+    },
+    put: {
+      tags: ["Settings"],
+      summary: "Replace platform settings",
+      requestBody: {
+        required: true,
+        content: { "application/json": { schema: settingsRequest } },
+      },
+      responses: { "200": { description: "Settings updated" } },
+    },
+    patch: {
+      tags: ["Settings"],
+      summary: "Partially update platform settings",
+      requestBody: {
+        required: true,
+        content: { "application/json": { schema: settingsRequest } },
+      },
+      responses: { "200": { description: "Settings updated" } },
+    },
+  },
 };
 
 const options: swaggerJsdoc.Options = {
@@ -307,9 +346,9 @@ const options: swaggerJsdoc.Options = {
     openapi: "3.0.3",
     info: {
       title: "SolarNaukri Admin Backend API",
-      version: "2.0.0",
+      version: "2.1.0",
       description:
-        "Complete admin API for SolarNaukri jobs, talent, employers, companies, categories, ambassadors, applications, analytics and verification.",
+        "Complete admin API for SolarNaukri jobs, talent, employers, companies, categories, ambassadors, applications, analytics, settings and verification.",
     },
     servers: [
       { url: "http://localhost:5000", description: "Local development server" },
@@ -319,7 +358,9 @@ const options: swaggerJsdoc.Options = {
       "Dashboard",
       "Jobs",
       "Candidates",
+      "Job Seekers",
       "Employers",
+      "Recruiters",
       "Companies",
       "Categories",
       "Ambassadors",
@@ -327,6 +368,7 @@ const options: swaggerJsdoc.Options = {
       "Activities",
       "Analytics",
       "Verification",
+      "Settings",
     ].map((name) => ({ name })),
     paths,
   },
