@@ -40,12 +40,22 @@ const sitePath = (process.env.SHAREPOINT_SITE_PATH || "/sites/Mabicons/recruitme
 const driveName = (process.env.SHAREPOINT_DRIVE_NAME || "Documents").trim();
 const rootFolder = (process.env.SHAREPOINT_TALENT_FOLDER || "CV Database/Master CV/position wise").trim();
 
+const ALLOWED_TALENT_FOLDERS = [
+  "Solar Electrical Technician",
+  "Solar Sales & Solar Operations CVs",
+] as const;
+
+const normalizedAllowedFolders = new Set(
+  ALLOWED_TALENT_FOLDERS.map((name) => name.trim().toLowerCase()),
+);
+
 export const sharePointTalentConfig = {
   configured: Boolean(tenantId && clientId && clientSecret),
   siteHost,
   sitePath,
   driveName,
   rootFolder,
+  allowedFolders: [...ALLOWED_TALENT_FOLDERS],
 };
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -231,8 +241,6 @@ async function collectFolderFiles(
     });
   }
 
-  // Recurse only inside the selected position folder. A small concurrency batch
-  // keeps nested CV folders responsive without scanning the entire CV database.
   const batchSize = 4;
   for (let i = 0; i < nestedFolders.length; i += batchSize) {
     const batch = nestedFolders.slice(i, i + batchSize);
@@ -255,13 +263,24 @@ export async function listSharePointTalentFolders(force = false): Promise<ShareP
   const entries = await listChildren(token, driveId, rootFolder);
 
   const folders = entries
-    .filter((item) => item.folder)
+    .filter(
+      (item) =>
+        item.folder && normalizedAllowedFolders.has(item.name.trim().toLowerCase()),
+    )
     .map((item) => ({
       id: item.id,
       name: item.name,
       childCount: item.folder?.childCount || 0,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => {
+      const aIndex = ALLOWED_TALENT_FOLDERS.findIndex(
+        (name) => name.toLowerCase() === a.name.toLowerCase(),
+      );
+      const bIndex = ALLOWED_TALENT_FOLDERS.findIndex(
+        (name) => name.toLowerCase() === b.name.toLowerCase(),
+      );
+      return aIndex - bIndex;
+    });
 
   foldersCache = { folders, expiresAt: Date.now() + CACHE_TTL_MS };
   return folders;
@@ -272,6 +291,10 @@ export async function loadSharePointTalentFolder(
   force = false,
 ): Promise<SharePointTalentItem[]> {
   const cacheKey = folderName.toLowerCase();
+  if (!normalizedAllowedFolders.has(cacheKey)) {
+    throw new Error(`SharePoint talent folder '${folderName}' is not enabled`);
+  }
+
   const cached = folderRecordsCache.get(cacheKey);
   if (!force && cached && cached.expiresAt > Date.now()) return cached.records;
 
@@ -295,8 +318,6 @@ export async function loadSharePointTalent(force = false) {
   const folders = await listSharePointTalentFolders(force);
   const all: SharePointTalentItem[] = [];
 
-  // Kept for API compatibility, but callers should prefer folder-specific loading.
-  // Load sequentially to avoid hammering Microsoft Graph on large libraries.
   for (const folder of folders) {
     all.push(...(await loadSharePointTalentFolder(folder.name, force)));
   }
