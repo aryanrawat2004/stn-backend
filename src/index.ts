@@ -17,12 +17,13 @@ import verificationRouter from "./routes/verification";
 import settingsRouter from "./routes/settings";
 
 import { swaggerSpec } from "./swagger";
-import { databaseMode } from "./db";
+import { databaseMode, databaseConfig, supabase } from "./db";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const isDevelopment = process.env.NODE_ENV !== "production";
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
@@ -65,7 +66,48 @@ app.get("/health", (_req, res) => {
     status: "ok",
     service: "SolarNaukri Backend",
     database: databaseMode,
+    databaseConfig,
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/health/db", async (_req, res) => {
+  if (!supabase) {
+    return res.status(503).json({
+      status: "error",
+      database: databaseMode,
+      databaseConfig,
+      error: "Supabase client is not configured",
+    });
+  }
+
+  const { data, error } = await supabase
+    .from("sn_companies")
+    .select("id")
+    .limit(1);
+
+  if (error) {
+    console.error("Supabase database health check failed:", error);
+    return res.status(500).json({
+      status: "error",
+      database: databaseMode,
+      databaseConfig,
+      supabase: {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      },
+    });
+  }
+
+  return res.json({
+    status: "ok",
+    database: databaseMode,
+    databaseConfig,
+    table: "sn_companies",
+    reachable: true,
+    sampleRows: data?.length ?? 0,
   });
 });
 
@@ -73,14 +115,30 @@ app.use((_req, res) => {
   res.status(404).json({ error: "Route not found" });
 });
 
-app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(error);
-  res.status(500).json({ error: "Internal server error" });
+app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("Unhandled API error:", error);
+
+  const payload: Record<string, unknown> = {
+    error: "Internal server error",
+  };
+
+  if (isDevelopment) {
+    payload.details = {
+      code: error?.code ?? null,
+      message: error?.message ?? String(error),
+      details: error?.details ?? null,
+      hint: error?.hint ?? null,
+    };
+  }
+
+  res.status(500).json(payload);
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`🗄️ Database mode: ${databaseMode}`);
+  console.log(`🔑 Database key type: ${databaseConfig.keyType}`);
   console.log(`📚 Swagger Docs: http://localhost:${PORT}/api-docs`);
   console.log(`📄 OpenAPI JSON: http://localhost:${PORT}/api-docs.json`);
+  console.log(`🩺 DB diagnostics: http://localhost:${PORT}/health/db`);
 });
