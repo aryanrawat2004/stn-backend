@@ -18,6 +18,7 @@ import settingsRouter from "./routes/settings";
 import talentRouter from "./routes/talent";
 import linkedinAuthRouter from "./routes/linkedin-auth";
 import meRouter from "./routes/me";
+import pricingRouter from "./routes/pricing";
 import { resourcesAdminRouter, resourcesPublicRouter } from "./routes/resources";
 import { requireWriteRoles } from "./middleware/rbac";
 
@@ -54,6 +55,7 @@ app.use(
 
 app.use("/api/auth/linkedin", linkedinAuthRouter);
 app.use("/api/resources", resourcesPublicRouter);
+app.use("/api/pricing", pricingRouter);
 app.use("/api/jobs", jobsRouter);
 app.use("/api/talent", talentRouter);
 app.use("/api/me", meRouter);
@@ -181,6 +183,7 @@ app.listen(PORT, () => {
   console.log(`🧩 Schema diagnostics: http://localhost:${PORT}/health/schema`);
   console.log(`🔗 LinkedIn auth: http://localhost:${PORT}/api/auth/linkedin/start?role=candidate`);
   console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
+  console.log(`💳 Pricing API: http://localhost:${PORT}/api/pricing`);
   console.log(`👤 Candidate self API: http://localhost:${PORT}/api/me/candidate`);
   console.log(`💼 Public jobs API: http://localhost:${PORT}/api/jobs`);
   console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
