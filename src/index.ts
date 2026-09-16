@@ -98,9 +98,8 @@ app.get("/health/schema", async (_req, res) => {
     });
   }
 
-  // Capture the narrowed client in a local constant so TypeScript keeps the
-  // non-null guarantee inside nested async callbacks below.
-  const db = supabase;
+  // Capture a guaranteed non-null client for nested async callbacks.
+  const db = supabase!;
 
   const requiredTables: Record<string, string> = {
     sn_jobs: 'id,role,company,location,type,status,createdAt,updatedAt',
