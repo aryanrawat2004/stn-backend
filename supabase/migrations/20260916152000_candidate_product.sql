@@ -8,6 +8,7 @@ alter table if exists public.sn_candidates
   add column if not exists "noticePeriod" text,
   add column if not exists about text,
   add column if not exists "resumeUrl" text,
+  add column if not exists "resumePath" text,
   add column if not exists "resumeName" text,
   add column if not exists "resumeUploadedAt" timestamptz,
   add column if not exists "projectExperience" jsonb not null default '[]'::jsonb,
@@ -39,7 +40,7 @@ create index if not exists sn_saved_jobs_candidate_idx
 create index if not exists sn_saved_jobs_job_idx
   on public.sn_saved_jobs("jobId");
 
--- Private resume storage. Uploads should happen through the backend service role.
+-- Private resume storage. Uploads happen through the backend service role.
 insert into storage.buckets (id, name, public)
 values ('candidate-resumes', 'candidate-resumes', false)
 on conflict (id) do update set public = false;
