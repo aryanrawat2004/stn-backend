@@ -173,13 +173,19 @@ router.get("/status", (_req, res) => {
   res.json({ data: sharePointTalentConfig });
 });
 
-router.get("/folders", async (req, res, next) => {
+router.get("/folders", async (req, res) => {
   try {
     const force = String(req.query.refresh || "") === "1";
     const folders = await listSharePointTalentFolders(force);
     res.json({ data: folders, meta: { total: folders.length, source: "sharepoint" } });
-  } catch (error) {
-    next(error);
+  } catch (error: any) {
+    console.error("Failed to load SharePoint folders:", error);
+    res.status(502).json({
+      error: error?.message || "Failed to load SharePoint folders",
+      details: error?.message,
+      data: [],
+      meta: { total: 0, source: "sharepoint" },
+    });
   }
 });
 
@@ -288,8 +294,14 @@ router.get("/sharepoint", async (req, res, next) => {
         source: "sharepoint",
       },
     });
-  } catch (error) {
-    next(error);
+  } catch (error: any) {
+    console.error("Failed to load SharePoint talent:", error);
+    res.status(502).json({
+      error: error?.message || "Failed to load SharePoint talent records",
+      details: error?.message,
+      data: [],
+      meta: { total: 0, allTotal: 0, folders: [], locations: [], source: "sharepoint" },
+    });
   }
 });
 

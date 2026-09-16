@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 type GraphDriveItem = {
   id: string;
   name: string;
@@ -32,23 +35,49 @@ export type SharePointTalentFolder = {
   childCount: number;
 };
 
-const tenantId = (process.env.SHAREPOINT_TENANT_ID || process.env.MS_TENANT_ID)?.trim();
-const clientId = (process.env.SHAREPOINT_CLIENT_ID || process.env.MS_CLIENT_ID)?.trim();
-const clientSecret = (process.env.SHAREPOINT_CLIENT_SECRET || process.env.MS_CLIENT_SECRET)?.trim();
-const siteHost = (process.env.SHAREPOINT_HOST || "mabicons.sharepoint.com").trim();
-const sitePath = (process.env.SHAREPOINT_SITE_PATH || "/sites/Mabicons/recruitment").trim();
-const driveName = (process.env.SHAREPOINT_DRIVE_NAME || "Documents").trim();
-const rootFolder = (process.env.SHAREPOINT_TALENT_FOLDER || "CV Database/Master CV/position wise/Solar").trim();
-const rootFolderName = rootFolder.split("/").filter(Boolean).pop() || "Solar";
+function getEnvConfig() {
+  const tenantId = (process.env.SHAREPOINT_TENANT_ID || process.env.MS_TENANT_ID)?.trim();
+  const clientId = (process.env.SHAREPOINT_CLIENT_ID || process.env.MS_CLIENT_ID)?.trim();
+  const clientSecret = (process.env.SHAREPOINT_CLIENT_SECRET || process.env.MS_CLIENT_SECRET)?.trim();
+  const siteHost = (process.env.SHAREPOINT_HOST || "mabicons.sharepoint.com").trim();
+  const sitePath = (process.env.SHAREPOINT_SITE_PATH || "/sites/Mabicons/recruitment").trim();
+  const driveName = (process.env.SHAREPOINT_DRIVE_NAME || "Documents").trim();
+  const rootFolder = (process.env.SHAREPOINT_TALENT_FOLDER || "CV Database/Master CV/position wise/Solar").trim();
+  const rootFolderName = rootFolder.split("/").filter(Boolean).pop() || "Solar";
+
+  return {
+    tenantId,
+    clientId,
+    clientSecret,
+    siteHost,
+    sitePath,
+    driveName,
+    rootFolder,
+    rootFolderName,
+    configured: Boolean(tenantId && clientId && clientSecret),
+  };
+}
 
 export const sharePointTalentConfig = {
-  configured: Boolean(tenantId && clientId && clientSecret),
-  siteHost,
-  sitePath,
-  driveName,
-  rootFolder,
-  mode: "single-folder",
-  folderName: rootFolderName,
+  get configured() {
+    return getEnvConfig().configured;
+  },
+  get siteHost() {
+    return getEnvConfig().siteHost;
+  },
+  get sitePath() {
+    return getEnvConfig().sitePath;
+  },
+  get driveName() {
+    return getEnvConfig().driveName;
+  },
+  get rootFolder() {
+    return getEnvConfig().rootFolder;
+  },
+  mode: "single-folder" as const,
+  get folderName() {
+    return getEnvConfig().rootFolderName;
+  },
 };
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -62,6 +91,7 @@ function withTimeout(signalMs = 20_000) {
 }
 
 async function getToken() {
+  const { tenantId, clientId, clientSecret } = getEnvConfig();
   if (!tenantId || !clientId || !clientSecret) {
     throw new Error("Microsoft Graph credentials are not configured");
   }
@@ -118,6 +148,7 @@ async function graphJson<T>(token: string, url: string): Promise<T> {
 }
 
 async function getSiteId(token: string) {
+  const { siteHost, sitePath } = getEnvConfig();
   const result = await graphJson<{ id: string }>(
     token,
     `https://graph.microsoft.com/v1.0/sites/${siteHost}:${sitePath}`,
@@ -126,6 +157,7 @@ async function getSiteId(token: string) {
 }
 
 async function getDriveId(token: string, siteId: string) {
+  const { driveName } = getEnvConfig();
   const result = await graphJson<{ value?: Array<{ id: string; name: string }> }>(
     token,
     `https://graph.microsoft.com/v1.0/sites/${encodeURIComponent(siteId)}/drives?$select=id,name`,
@@ -245,6 +277,7 @@ async function collectFolderFiles(
 export async function listSharePointTalentFolders(force = false): Promise<SharePointTalentFolder[]> {
   if (!force && foldersCache && foldersCache.expiresAt > Date.now()) return foldersCache.folders;
 
+  const { rootFolder, rootFolderName } = getEnvConfig();
   const token = await getToken();
   const { driveId } = await getMetadata(token);
   const entries = await listChildren(token, driveId, rootFolder);
@@ -272,6 +305,7 @@ export async function loadSharePointTalentFolder(
   folderName: string,
   force = false,
 ): Promise<SharePointTalentItem[]> {
+  const { rootFolder, rootFolderName } = getEnvConfig();
   if (folderName.trim().toLowerCase() !== rootFolderName.toLowerCase()) {
     throw new Error(`SharePoint talent folder '${folderName}' is not enabled`);
   }
@@ -293,5 +327,6 @@ export async function loadSharePointTalentFolder(
 }
 
 export async function loadSharePointTalent(force = false) {
+  const { rootFolderName } = getEnvConfig();
   return loadSharePointTalentFolder(rootFolderName, force);
 }
