@@ -26,9 +26,13 @@ create index if not exists sn_resources_published_at_idx on public.sn_resources(
 
 alter table public.sn_resources enable row level security;
 
--- Public visitors can only read published content. Server-side admin writes use the service-role key.
 drop policy if exists "Public can read published resources" on public.sn_resources;
 create policy "Public can read published resources"
 on public.sn_resources for select
 to anon, authenticated
 using (status = 'published');
+
+-- Public bucket used for cover images, PDFs and downloadable resources.
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('resources', 'resources', true, 10485760)
+on conflict (id) do update set public = true, file_size_limit = 10485760;
