@@ -17,6 +17,7 @@ import verificationRouter from "./routes/verification";
 import settingsRouter from "./routes/settings";
 import talentRouter from "./routes/talent";
 import linkedinAuthRouter from "./routes/linkedin-auth";
+import meRouter from "./routes/me";
 import { resourcesAdminRouter, resourcesPublicRouter } from "./routes/resources";
 import { requireWriteRoles } from "./middleware/rbac";
 
@@ -53,7 +54,9 @@ app.use(
 
 app.use("/api/auth/linkedin", linkedinAuthRouter);
 app.use("/api/resources", resourcesPublicRouter);
+app.use("/api/jobs", jobsRouter);
 app.use("/api/talent", talentRouter);
+app.use("/api/me", meRouter);
 app.use("/api/admin/dashboard", dashboardRouter);
 app.use("/api/admin/analytics", analyticsRouter);
 app.use("/api/admin/jobs", jobsRouter);
@@ -95,12 +98,13 @@ app.get("/health/schema", async (_req, res) => {
 
   const requiredTables: Record<string, string> = {
     sn_jobs: 'id,role,company,location,type,status,createdAt,updatedAt',
-    sn_candidates: 'id,name,email,phone,role,location,accountStatus,createdAt,updatedAt',
+    sn_candidates: 'id,name,email,phone,role,location,accountStatus,profileCompletion,resumeStrength,talentPassportScore,currentSalary,expectedSalary,noticePeriod,about,resumeUrl,resumeName,firebaseUid,createdAt,updatedAt',
     sn_employers: 'id,companyName,contactPerson,email,location,status,createdAt,updatedAt',
     sn_companies: 'id,companyName,industry,location,email,phone,verificationStatus,accountStatus,createdAt,updatedAt',
     sn_categories: 'id,name,slug,description,status,createdAt,updatedAt',
     sn_ambassadors: 'id,name,email,phone,college,city,status,createdAt,updatedAt',
     sn_applications: 'id,jobId,candidateId,status,appliedAt,createdAt,updatedAt',
+    sn_saved_jobs: 'id,candidateId,jobId,createdAt',
     sn_activities: 'id,type,title,description,createdAt,updatedAt',
     settings: 'id,siteName,contactEmail,emailAlerts,autoApproveVerified,weeklyDigest,createdAt,updatedAt',
     sn_resources: 'id,slug,type,title,excerpt,content,category,read_time,cover_image_url,resource_url,author_name,status,featured,published_at,created_at,updated_at',
@@ -120,12 +124,22 @@ app.get("/health/schema", async (_req, res) => {
 
   const { data: buckets, error: bucketError } = await supabase.storage.listBuckets();
   const resourcesBucket = buckets?.find((bucket) => bucket.id === "resources");
+  const resumesBucket = buckets?.find((bucket) => bucket.id === "candidate-resumes");
   const storage = {
-    ok: !bucketError && Boolean(resourcesBucket),
+    ok: !bucketError && Boolean(resourcesBucket) && Boolean(resumesBucket),
     resourcesBucket: resourcesBucket
       ? { id: resourcesBucket.id, name: resourcesBucket.name, public: resourcesBucket.public }
       : null,
-    error: bucketError ? bucketError.message : resourcesBucket ? null : "resources bucket is missing",
+    resumesBucket: resumesBucket
+      ? { id: resumesBucket.id, name: resumesBucket.name, public: resumesBucket.public }
+      : null,
+    error: bucketError
+      ? bucketError.message
+      : !resourcesBucket
+        ? "resources bucket is missing"
+        : !resumesBucket
+          ? "candidate-resumes bucket is missing"
+          : null,
   };
 
   const failedTables = checks.filter((check) => !check.ok);
@@ -163,5 +177,7 @@ app.listen(PORT, () => {
   console.log(`🧩 Schema diagnostics: http://localhost:${PORT}/health/schema`);
   console.log(`🔗 LinkedIn auth: http://localhost:${PORT}/api/auth/linkedin/start?role=candidate`);
   console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
+  console.log(`👤 Candidate self API: http://localhost:${PORT}/api/me/candidate`);
+  console.log(`💼 Public jobs API: http://localhost:${PORT}/api/jobs`);
   console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
 });
