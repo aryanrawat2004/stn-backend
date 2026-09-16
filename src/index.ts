@@ -16,6 +16,7 @@ import analyticsRouter from "./routes/analytics";
 import verificationRouter from "./routes/verification";
 import settingsRouter from "./routes/settings";
 import talentRouter from "./routes/talent";
+import linkedinAuthRouter from "./routes/linkedin-auth";
 import { requireWriteRoles } from "./middleware/rbac";
 
 import { swaggerSpec } from "./swagger";
@@ -48,6 +49,9 @@ app.use(
     },
   }),
 );
+
+// Public authentication APIs.
+app.use("/api/auth/linkedin", linkedinAuthRouter);
 
 // Public/read-only APIs.
 app.use("/api/talent", talentRouter);
@@ -152,5 +156,6 @@ app.listen(PORT, () => {
   console.log(`📚 Swagger Docs: http://localhost:${PORT}/api-docs`);
   console.log(`📄 OpenAPI JSON: http://localhost:${PORT}/api-docs.json`);
   console.log(`🩺 DB diagnostics: http://localhost:${PORT}/health/db`);
+  console.log(`🔗 LinkedIn auth: http://localhost:${PORT}/api/auth/linkedin/start?role=candidate`);
   console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
 });
