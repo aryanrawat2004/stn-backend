@@ -84,6 +84,66 @@ app.get("/health/db", async (_req, res) => {
   return res.json({ status: "ok", database: databaseMode, databaseConfig, table: "sn_companies", reachable: true, sampleRows: data?.length ?? 0 });
 });
 
+app.get("/health/schema", async (_req, res) => {
+  if (!supabase) {
+    return res.status(503).json({
+      status: "error",
+      database: databaseMode,
+      error: "Supabase client is not configured",
+    });
+  }
+
+  const requiredTables: Record<string, string> = {
+    sn_jobs: 'id,role,company,location,type,status,createdAt,updatedAt',
+    sn_candidates: 'id,name,email,phone,role,location,accountStatus,createdAt,updatedAt',
+    sn_employers: 'id,companyName,contactPerson,email,location,status,createdAt,updatedAt',
+    sn_companies: 'id,companyName,industry,location,email,phone,verificationStatus,accountStatus,createdAt,updatedAt',
+    sn_categories: 'id,name,slug,description,status,createdAt,updatedAt',
+    sn_ambassadors: 'id,name,email,phone,college,city,status,createdAt,updatedAt',
+    sn_applications: 'id,jobId,candidateId,status,appliedAt,createdAt,updatedAt',
+    sn_activities: 'id,type,title,description,createdAt,updatedAt',
+    settings: 'id,siteName,contactEmail,emailAlerts,autoApproveVerified,weeklyDigest,createdAt,updatedAt',
+    sn_resources: 'id,slug,type,title,excerpt,content,category,read_time,cover_image_url,resource_url,author_name,status,featured,published_at,created_at,updated_at',
+    site_visits: 'id,visitor_id,session_id,user_id,path,started_at,last_seen,active_seconds,device,referrer',
+  };
+
+  const checks = await Promise.all(
+    Object.entries(requiredTables).map(async ([table, columns]) => {
+      const { error } = await supabase.from(table).select(columns).limit(1);
+      return {
+        table,
+        ok: !error,
+        error: error ? { code: error.code, message: error.message, hint: error.hint } : null,
+      };
+    }),
+  );
+
+  const { data: buckets, error: bucketError } = await supabase.storage.listBuckets();
+  const resourcesBucket = buckets?.find((bucket) => bucket.id === "resources");
+  const storage = {
+    ok: !bucketError && Boolean(resourcesBucket),
+    resourcesBucket: resourcesBucket
+      ? { id: resourcesBucket.id, name: resourcesBucket.name, public: resourcesBucket.public }
+      : null,
+    error: bucketError ? bucketError.message : resourcesBucket ? null : "resources bucket is missing",
+  };
+
+  const failedTables = checks.filter((check) => !check.ok);
+  const ok = failedTables.length === 0 && storage.ok;
+
+  return res.status(ok ? 200 : 500).json({
+    status: ok ? "ok" : "error",
+    database: databaseMode,
+    tables: checks,
+    storage,
+    summary: {
+      checkedTables: checks.length,
+      passedTables: checks.length - failedTables.length,
+      failedTables: failedTables.map((check) => check.table),
+    },
+  });
+});
+
 app.use((_req, res) => { res.status(404).json({ error: "Route not found" }); });
 
 app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -100,6 +160,7 @@ app.listen(PORT, () => {
   console.log(`📚 Swagger Docs: http://localhost:${PORT}/api-docs`);
   console.log(`📄 OpenAPI JSON: http://localhost:${PORT}/api-docs.json`);
   console.log(`🩺 DB diagnostics: http://localhost:${PORT}/health/db`);
+  console.log(`🧩 Schema diagnostics: http://localhost:${PORT}/health/schema`);
   console.log(`🔗 LinkedIn auth: http://localhost:${PORT}/api/auth/linkedin/start?role=candidate`);
   console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
   console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
