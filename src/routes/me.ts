@@ -28,10 +28,7 @@ async function requireAuth(req: Request, res: Response): Promise<AuthContext | n
 function normalizeSkills(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).map((v) => v.trim()).filter(Boolean);
   if (typeof value === "string") {
-    return value
-      .split(/[,|;]/g)
-      .map((v) => v.trim())
-      .filter(Boolean);
+    return value.split(/[,|;]/g).map((v) => v.trim()).filter(Boolean);
   }
   return [];
 }
@@ -70,9 +67,17 @@ function calculateMatch(candidate: Record<string, any>, job: Record<string, any>
 
   return {
     score: Math.max(0, Math.min(100, score)),
-    matchedSkills: matchedSkills.map((skill) => uniqueJobSkills.find((s) => s === skill) || skill),
+    matchedSkills,
     missingSkills: missingSkills.slice(0, 5),
   };
+}
+
+async function withSignedResume(candidate: Record<string, any> | null) {
+  if (!candidate || !supabase || !candidate.resumePath) return candidate;
+  const { data } = await supabase.storage
+    .from("candidate-resumes")
+    .createSignedUrl(String(candidate.resumePath), 60 * 60);
+  return { ...candidate, resumeUrl: data?.signedUrl || null };
 }
 
 async function ensureCandidate(auth: AuthContext) {
@@ -127,13 +132,11 @@ async function ensureCandidate(auth: AuthContext) {
 
 async function ensureRecruiter(auth: AuthContext) {
   if (!supabase || !auth.email) return null;
-
   const { data, error } = await supabase
     .from("sn_employers")
     .select("*")
     .ilike("email", auth.email)
     .maybeSingle();
-
   if (error) throw error;
   return data;
 }
@@ -143,7 +146,7 @@ router.get("/candidate", wrap(async (req, res) => {
   const auth = await requireAuth(req, res);
   if (!auth) return;
   const candidate = await ensureCandidate(auth);
-  res.json({ data: candidate });
+  res.json({ data: await withSignedResume(candidate) });
 }));
 
 router.patch("/candidate", wrap(async (req, res) => {
@@ -154,21 +157,9 @@ router.patch("/candidate", wrap(async (req, res) => {
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
 
   const allowedFields = [
-    "name",
-    "phone",
-    "role",
-    "location",
-    "experience",
-    "skills",
-    "currentSalary",
-    "expectedSalary",
-    "noticePeriod",
-    "about",
-    "resumeUrl",
-    "resumeName",
-    "resumeUploadedAt",
-    "projectExperience",
-    "certifications",
+    "name", "phone", "role", "location", "experience", "skills",
+    "currentSalary", "expectedSalary", "noticePeriod", "about",
+    "projectExperience", "certifications",
   ];
 
   const patch: Record<string, unknown> = {};
@@ -176,15 +167,18 @@ router.patch("/candidate", wrap(async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) patch[field] = req.body[field];
   }
 
-  const completionFields = ["name", "phone", "role", "location", "experience", "skills", "about", "resumeUrl"];
+  const completionFields = ["name", "phone", "role", "location", "experience", "skills", "about", "resumePath"];
   const projected = { ...candidate, ...patch } as Record<string, any>;
   const completed = completionFields.filter((field) => {
     const value = projected[field];
     return Array.isArray(value) ? value.length > 0 : Boolean(String(value || "").trim());
   }).length;
   const profileCompletion = Math.round((completed / completionFields.length) * 100);
-  const resumeStrength = projected.resumeUrl ? Math.min(100, 55 + normalizeSkills(projected.skills).length * 5) : 0;
-  const talentPassportScore = Math.min(100, Math.round(profileCompletion * 0.55 + resumeStrength * 0.25 + (projected.verified ? 20 : 5)));
+  const resumeStrength = projected.resumePath ? Math.min(100, 55 + normalizeSkills(projected.skills).length * 5) : 0;
+  const talentPassportScore = Math.min(
+    100,
+    Math.round(profileCompletion * 0.55 + resumeStrength * 0.25 + (projected.verified ? 20 : 5)),
+  );
 
   patch.profileCompletion = profileCompletion;
   patch.resumeStrength = resumeStrength;
@@ -197,7 +191,86 @@ router.patch("/candidate", wrap(async (req, res) => {
     .eq("id", candidate.id)
     .select("*")
     .single();
+  if (error) throw error;
+  res.json({ data: await withSignedResume(data) });
+}));
 
+router.post("/resume", wrap(async (req, res) => {
+  if (!requireDb(res)) return;
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+  const candidate = await ensureCandidate(auth);
+  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+
+  const fileName = String(req.body?.fileName || "").trim();
+  const mimeType = String(req.body?.mimeType || "application/octet-stream").trim();
+  const base64 = String(req.body?.base64 || "");
+  if (!fileName || !base64) return res.status(400).json({ error: "fileName and base64 are required" });
+
+  const allowed = new Set([
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ]);
+  if (!allowed.has(mimeType)) return res.status(400).json({ error: "Only PDF, DOC and DOCX files are allowed" });
+
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.byteLength > 5 * 1024 * 1024) return res.status(400).json({ error: "Resume must be 5 MB or smaller" });
+
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const path = `${candidate.id}/${Date.now()}-${safeName}`;
+  const { error: uploadError } = await supabase!.storage
+    .from("candidate-resumes")
+    .upload(path, bytes, { contentType: mimeType, upsert: false });
+  if (uploadError) throw uploadError;
+
+  if (candidate.resumePath) {
+    await supabase!.storage.from("candidate-resumes").remove([String(candidate.resumePath)]).catch(() => undefined);
+  }
+
+  const now = new Date().toISOString();
+  const skills = normalizeSkills(candidate.skills);
+  const profileCompletion = Math.max(Number(candidate.profileCompletion || 0), 75);
+  const resumeStrength = Math.min(100, 55 + skills.length * 5);
+  const talentPassportScore = Math.min(
+    100,
+    Math.round(profileCompletion * 0.55 + resumeStrength * 0.25 + (candidate.verified ? 20 : 5)),
+  );
+
+  const { data, error } = await supabase!
+    .from("sn_candidates")
+    .update({
+      resumePath: path,
+      resumeName: fileName,
+      resumeUploadedAt: now,
+      profileCompletion,
+      resumeStrength,
+      talentPassportScore,
+      updatedAt: now,
+    })
+    .eq("id", candidate.id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  res.json({ data: await withSignedResume(data) });
+}));
+
+router.delete("/resume", wrap(async (req, res) => {
+  if (!requireDb(res)) return;
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+  const candidate = await ensureCandidate(auth);
+  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+
+  if (candidate.resumePath) {
+    await supabase!.storage.from("candidate-resumes").remove([String(candidate.resumePath)]);
+  }
+  const { data, error } = await supabase!
+    .from("sn_candidates")
+    .update({ resumePath: null, resumeName: null, resumeUploadedAt: null, resumeStrength: 0, updatedAt: new Date().toISOString() })
+    .eq("id", candidate.id)
+    .select("*")
+    .single();
   if (error) throw error;
   res.json({ data });
 }));
@@ -223,14 +296,8 @@ router.get("/applications", wrap(async (req, res) => {
     if (result.error) throw result.error;
     jobs = result.data || [];
   }
-
   const byJob = new Map(jobs.map((job) => [job.id, job]));
-  res.json({
-    data: (applications || []).map((application: any) => ({
-      ...application,
-      job: byJob.get(application.jobId) || null,
-    })),
-  });
+  res.json({ data: (applications || []).map((application: any) => ({ ...application, job: byJob.get(application.jobId) || null })) });
 }));
 
 router.post("/applications", wrap(async (req, res) => {
@@ -242,6 +309,10 @@ router.post("/applications", wrap(async (req, res) => {
 
   const jobId = String(req.body?.jobId || "").trim();
   if (!jobId) return res.status(400).json({ error: "jobId is required" });
+
+  const jobCheck = await supabase!.from("sn_jobs").select("id,status").eq("id", jobId).maybeSingle();
+  if (jobCheck.error) throw jobCheck.error;
+  if (!jobCheck.data || jobCheck.data.status !== "Active") return res.status(404).json({ error: "Active job not found" });
 
   const existing = await supabase!
     .from("sn_applications")
@@ -268,7 +339,6 @@ router.post("/applications", wrap(async (req, res) => {
     .select("*")
     .single();
   if (error) throw error;
-
   res.status(201).json({ data });
 }));
 
@@ -313,7 +383,6 @@ router.get("/saved-jobs", wrap(async (req, res) => {
     jobs = result.data || [];
   }
   const byJob = new Map(jobs.map((job) => [job.id, job]));
-
   res.json({ data: (saved || []).map((item: any) => ({ ...item, job: byJob.get(item.jobId) || null })) });
 }));
 
@@ -327,21 +396,24 @@ router.post("/saved-jobs", wrap(async (req, res) => {
   const jobId = String(req.body?.jobId || "").trim();
   if (!jobId) return res.status(400).json({ error: "jobId is required" });
 
-  const now = new Date().toISOString();
+  const existing = await supabase!
+    .from("sn_saved_jobs")
+    .select("*")
+    .eq("candidateId", candidate.id)
+    .eq("jobId", jobId)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  if (existing.data) return res.json({ data: existing.data });
+
   const payload = {
     id: `SAV-${randomUUID().slice(0, 8).toUpperCase()}`,
     candidateId: candidate.id,
     jobId,
-    createdAt: now,
+    createdAt: new Date().toISOString(),
   };
-
-  const { data, error } = await supabase!
-    .from("sn_saved_jobs")
-    .upsert(payload, { onConflict: "candidateId,jobId", ignoreDuplicates: true })
-    .select("*")
-    .maybeSingle();
+  const { data, error } = await supabase!.from("sn_saved_jobs").insert(payload).select("*").single();
   if (error) throw error;
-  res.status(201).json({ data: data || payload });
+  res.status(201).json({ data });
 }));
 
 router.delete("/saved-jobs/:jobId", wrap(async (req, res) => {
@@ -350,7 +422,6 @@ router.delete("/saved-jobs/:jobId", wrap(async (req, res) => {
   if (!auth) return;
   const candidate = await ensureCandidate(auth);
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
-
   const { error } = await supabase!
     .from("sn_saved_jobs")
     .delete()
@@ -372,23 +443,19 @@ router.get("/dashboard", wrap(async (req, res) => {
     supabase!.from("sn_saved_jobs").select("*").eq("candidateId", candidate.id),
     supabase!.from("sn_jobs").select("*").eq("status", "Active").limit(200),
   ]);
-
   if (applicationsResult.error) throw applicationsResult.error;
   if (savedResult.error) throw savedResult.error;
   if (jobsResult.error) throw jobsResult.error;
 
   const applications = applicationsResult.data || [];
   const jobs = jobsResult.data || [];
-  const matches = jobs
-    .map((job: any) => ({ job, ...calculateMatch(candidate, job) }))
-    .sort((a, b) => b.score - a.score);
-
+  const matches = jobs.map((job: any) => ({ job, ...calculateMatch(candidate, job) })).sort((a, b) => b.score - a.score);
   const interviews = applications.filter((item: any) => item.status === "Interview").length;
   const shortlisted = applications.filter((item: any) => ["Screening", "Shortlisted", "Interview", "Offer"].includes(item.status)).length;
 
   res.json({
     data: {
-      candidate,
+      candidate: await withSignedResume(candidate),
       metrics: {
         profileCompletion: Number(candidate.profileCompletion || 0),
         talentPassportScore: Number(candidate.talentPassportScore || 0),
@@ -414,11 +481,7 @@ router.get("/matches", wrap(async (req, res) => {
 
   const { data: jobs, error } = await supabase!.from("sn_jobs").select("*").eq("status", "Active").limit(200);
   if (error) throw error;
-
-  const data = (jobs || [])
-    .map((job: any) => ({ job, ...calculateMatch(candidate, job) }))
-    .sort((a, b) => b.score - a.score);
-
+  const data = (jobs || []).map((job: any) => ({ job, ...calculateMatch(candidate, job) })).sort((a, b) => b.score - a.score);
   res.json({ data });
 }));
 
@@ -438,8 +501,7 @@ router.get("/recruiter/dashboard", wrap(async (req, res) => {
   const recruiter = await ensureRecruiter(auth);
   if (!recruiter) return res.status(404).json({ error: "Recruiter profile not found for this email" });
 
-  const companyName = String(recruiter.companyName || "");
-  const jobsResult = await supabase!.from("sn_jobs").select("*").eq("company", companyName).limit(200);
+  const jobsResult = await supabase!.from("sn_jobs").select("*").eq("company", recruiter.companyName).limit(200);
   if (jobsResult.error) throw jobsResult.error;
   const jobs = jobsResult.data || [];
   const jobIds = jobs.map((job: any) => job.id);
@@ -497,7 +559,6 @@ router.get("/recruiter/applications", wrap(async (req, res) => {
 
   const byJob = new Map(jobs.map((job: any) => [job.id, job]));
   const byCandidate = new Map(candidates.map((candidate: any) => [candidate.id, candidate]));
-
   res.json({
     data: (applicationsResult.data || []).map((item: any) => ({
       ...item,
