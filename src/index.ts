@@ -96,6 +96,10 @@ app.get("/health/schema", async (_req, res) => {
     });
   }
 
+  // Capture the narrowed client in a local constant so TypeScript keeps the
+  // non-null guarantee inside nested async callbacks below.
+  const db = supabase;
+
   const requiredTables: Record<string, string> = {
     sn_jobs: 'id,role,company,location,type,status,createdAt,updatedAt',
     sn_candidates: 'id,name,email,phone,role,location,accountStatus,profileCompletion,resumeStrength,talentPassportScore,currentSalary,expectedSalary,noticePeriod,about,resumeUrl,resumeName,firebaseUid,createdAt,updatedAt',
@@ -113,7 +117,7 @@ app.get("/health/schema", async (_req, res) => {
 
   const checks = await Promise.all(
     Object.entries(requiredTables).map(async ([table, columns]) => {
-      const { error } = await supabase.from(table).select(columns).limit(1);
+      const { error } = await db.from(table).select(columns).limit(1);
       return {
         table,
         ok: !error,
@@ -122,7 +126,7 @@ app.get("/health/schema", async (_req, res) => {
     }),
   );
 
-  const { data: buckets, error: bucketError } = await supabase.storage.listBuckets();
+  const { data: buckets, error: bucketError } = await db.storage.listBuckets();
   const resourcesBucket = buckets?.find((bucket) => bucket.id === "resources");
   const resumesBucket = buckets?.find((bucket) => bucket.id === "candidate-resumes");
   const storage = {
