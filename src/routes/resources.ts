@@ -3,8 +3,8 @@ import { supabase } from "../db";
 
 const publicRouter = Router();
 const adminRouter = Router();
-
 const table = "sn_resources";
+const bucket = "resources";
 
 function dbUnavailable(res: any) {
   return res.status(503).json({ error: "Database is not configured" });
@@ -47,12 +47,33 @@ publicRouter.get("/:slug", async (req, res) => {
 
 adminRouter.get("/", async (_req, res) => {
   if (!supabase) return dbUnavailable(res);
-  const { data, error } = await supabase
-    .from(table)
-    .select("*")
-    .order("updated_at", { ascending: false });
+  const { data, error } = await supabase.from(table).select("*").order("updated_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ data: data ?? [] });
+});
+
+adminRouter.post("/upload", async (req, res) => {
+  if (!supabase) return dbUnavailable(res);
+
+  const fileName = String(req.body.fileName || "").trim();
+  const contentType = String(req.body.contentType || "application/octet-stream");
+  const dataBase64 = String(req.body.dataBase64 || "");
+  const folder = String(req.body.folder || "files").replace(/[^a-z0-9_-]/gi, "-");
+
+  if (!fileName || !dataBase64) return res.status(400).json({ error: "fileName and dataBase64 are required" });
+
+  const safeName = fileName.replace(/[^a-z0-9._-]/gi, "-");
+  const path = `${folder}/${Date.now()}-${safeName}`;
+  const buffer = Buffer.from(dataBase64, "base64");
+
+  const { error } = await supabase.storage.from(bucket).upload(path, buffer, {
+    contentType,
+    upsert: false,
+  });
+  if (error) return res.status(400).json({ error: error.message });
+
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  return res.status(201).json({ data: { path, url: data.publicUrl } });
 });
 
 adminRouter.post("/", async (req, res) => {
@@ -74,9 +95,7 @@ adminRouter.post("/", async (req, res) => {
     published_at: req.body.status === "published" ? new Date().toISOString() : null,
   };
 
-  if (!payload.slug || !payload.title) {
-    return res.status(400).json({ error: "slug and title are required" });
-  }
+  if (!payload.slug || !payload.title) return res.status(400).json({ error: "slug and title are required" });
 
   const { data, error } = await supabase.from(table).insert(payload).select("*").single();
   if (error) return res.status(400).json({ error: error.message });
@@ -85,22 +104,12 @@ adminRouter.post("/", async (req, res) => {
 
 adminRouter.put("/:id", async (req, res) => {
   if (!supabase) return dbUnavailable(res);
-
   const patch: Record<string, unknown> = { ...req.body, updated_at: new Date().toISOString() };
   delete patch.id;
   delete patch.created_at;
+  if (req.body.status === "published" && !req.body.published_at) patch.published_at = new Date().toISOString();
 
-  if (req.body.status === "published" && !req.body.published_at) {
-    patch.published_at = new Date().toISOString();
-  }
-
-  const { data, error } = await supabase
-    .from(table)
-    .update(patch)
-    .eq("id", req.params.id)
-    .select("*")
-    .single();
-
+  const { data, error } = await supabase.from(table).update(patch).eq("id", req.params.id).select("*").single();
   if (error) return res.status(400).json({ error: error.message });
   return res.json({ data });
 });
