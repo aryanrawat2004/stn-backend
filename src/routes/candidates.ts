@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { store } from "../store";
-import { patchEntity } from "../repository";
+import { getEntity, patchEntity } from "../repository";
 import { createCrudRouter } from "./crud";
 
 const router = Router();
@@ -10,8 +10,9 @@ const wrap = (fn: (req: Request, res: Response) => Promise<Response | void>) =>
   (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res)).catch(next);
 
 router.patch("/:id/verify", wrap(async (req, res) => {
-  const current = store.candidates.find((item) => item.id === req.params.id);
-  const verified = req.body.verified ?? !(current?.verified ?? false);
+  const current = await getEntity(table, store.candidates, req.params.id);
+  if (!current) return res.status(404).json({ error: "Candidate not found" });
+  const verified = req.body.verified ?? !Boolean(current.verified);
   const candidate = await patchEntity(table, store.candidates, req.params.id, { verified, updatedAt: new Date().toISOString() });
   if (!candidate) return res.status(404).json({ error: "Candidate not found" });
   res.json({ data: candidate });
