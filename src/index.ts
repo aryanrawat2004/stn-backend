@@ -17,6 +17,7 @@ import verificationRouter from "./routes/verification";
 import settingsRouter from "./routes/settings";
 import talentRouter from "./routes/talent";
 import linkedinAuthRouter from "./routes/linkedin-auth";
+import { resourcesAdminRouter, resourcesPublicRouter } from "./routes/resources";
 import { requireWriteRoles } from "./middleware/rbac";
 
 import { swaggerSpec } from "./swagger";
@@ -54,6 +55,7 @@ app.use(
 app.use("/api/auth/linkedin", linkedinAuthRouter);
 
 // Public/read-only APIs.
+app.use("/api/resources", resourcesPublicRouter);
 app.use("/api/talent", talentRouter);
 app.use("/api/admin/dashboard", dashboardRouter);
 app.use("/api/admin/analytics", analyticsRouter);
@@ -64,6 +66,7 @@ app.use("/api/admin/jobs", jobsRouter);
 
 // Admin management reads stay available to the existing dashboard. Any
 // mutation (POST/PUT/PATCH/DELETE) requires an authenticated admin role.
+app.use("/api/admin/resources", adminWriteGuard, resourcesAdminRouter);
 app.use("/api/admin/candidates", adminWriteGuard, candidatesRouter);
 app.use("/api/admin/job-seekers", adminWriteGuard, candidatesRouter);
 app.use("/api/admin/employers", adminWriteGuard, employersRouter);
@@ -157,5 +160,6 @@ app.listen(PORT, () => {
   console.log(`📄 OpenAPI JSON: http://localhost:${PORT}/api-docs.json`);
   console.log(`🩺 DB diagnostics: http://localhost:${PORT}/health/db`);
   console.log(`🔗 LinkedIn auth: http://localhost:${PORT}/api/auth/linkedin/start?role=candidate`);
+  console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
   console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
 });
