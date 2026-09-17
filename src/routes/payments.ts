@@ -14,18 +14,31 @@ const PAID_PLANS = {
 
 type PaidPlanId = keyof typeof PAID_PLANS;
 
-function getRazorpayClient() {
-  const keyId = process.env.RAZORPAY_KEY_ID;
+function getRazorpayConfig() {
+  const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
 
   if (!keyId || !keySecret) {
     return null;
   }
 
-  return new Razorpay({
-    key_id: keyId,
-    key_secret: keySecret,
-  });
+  return { keyId, keySecret };
+}
+
+function getRazorpayClient() {
+  const config = getRazorpayConfig();
+
+  if (!config) {
+    return null;
+  }
+
+  return {
+    client: new Razorpay({
+      key_id: config.keyId,
+      key_secret: config.keySecret,
+    }),
+    keyId: config.keyId,
+  };
 }
 
 router.post("/create-order", async (req, res) => {
@@ -41,15 +54,21 @@ router.post("/create-order", async (req, res) => {
       return res.status(400).json({ error: "Amount must be at least 100 paise" });
     }
 
-    const razorpay = getRazorpayClient();
+    const razorpayConfig = getRazorpayClient();
 
-    if (!razorpay) {
-      return res.status(500).json({ error: "Razorpay is not configured on the server" });
+    if (!razorpayConfig) {
+      return res.status(500).json({
+        error: "Razorpay is not configured on the server",
+        missing: {
+          keyId: !(process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID),
+          keySecret: !process.env.RAZORPAY_KEY_SECRET,
+        },
+      });
     }
 
     const receipt = `sn_${planId}_${Date.now()}`.slice(0, 40);
 
-    const order = await razorpay.orders.create({
+    const order = await razorpayConfig.client.orders.create({
       amount: plan.amount,
       currency: plan.currency,
       receipt,
@@ -66,6 +85,7 @@ router.post("/create-order", async (req, res) => {
       currency: order.currency,
       plan_id: planId,
       plan_name: plan.name,
+      key_id: razorpayConfig.keyId,
     });
   } catch (error: any) {
     console.error("Razorpay create-order error:", error);
