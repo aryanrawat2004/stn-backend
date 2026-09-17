@@ -5,7 +5,7 @@ alter table if exists public.candidate_verifications
   add column if not exists candidate_id text,
   add column if not exists full_name text,
   add column if not exists phone text,
-  add column if not exists current_role text,
+  add column if not exists "current_role" text,
   add column if not exists experience text,
   add column if not exists location text,
   add column if not exists status text default 'draft',
