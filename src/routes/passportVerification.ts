@@ -7,71 +7,90 @@ import { supabase } from "../db";
 
 const router = Router();
 
-const uploadDirectory = path.join(
-  process.cwd(),
-  "uploads",
-  "passport-verification",
-);
-
-if (!fs.existsSync(uploadDirectory)) {
-  fs.mkdirSync(uploadDirectory, {
-    recursive: true,
-  });
-}
+const uploadDirectory = path.join(process.cwd(), "uploads", "passport-verification");
+if (!fs.existsSync(uploadDirectory)) fs.mkdirSync(uploadDirectory, { recursive: true });
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, uploadDirectory);
-  },
-
-  filename: (_req, file, cb) => {
-    const extension = path.extname(file.originalname);
-
-    const uniqueName =
-      `${Date.now()}-${crypto.randomUUID()}${extension}`;
-
-    cb(null, uniqueName);
-  },
+  destination: (_req, _file, cb) => cb(null, uploadDirectory),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${crypto.randomUUID()}${path.extname(file.originalname)}`),
 });
 
 const upload = multer({
   storage,
-
-  limits: {
-    fileSize: 10 * 1024 * 1024,
-  },
-
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowedMimeTypes = [
-      "application/pdf",
-      "image/jpeg",
-      "image/png",
-    ];
-
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      return cb(
-        new Error("Only PDF, JPG and PNG documents are allowed"),
-      );
-    }
-
+    const allowed = ["application/pdf", "image/jpeg", "image/png"];
+    if (!allowed.includes(file.mimetype)) return cb(new Error("Only PDF, JPG and PNG documents are allowed"));
     cb(null, true);
   },
 });
 
+const STEP_DOCUMENTS = {
+  aadhaar: ["aadhaar_front", "aadhaar_back"],
+  employment: ["resume"],
+  police: ["police_verification_certificate"],
+} as const;
 
-/* =========================================================
-   CREATE VERIFICATION
-========================================================= */
+type VerificationStep = keyof typeof STEP_DOCUMENTS;
+type StepStatus = "pending" | "submitted" | "under_review" | "verified" | "rejected";
+
+function addMonths(date: Date, months: number) {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
+}
+
+function statusColumn(step: VerificationStep) {
+  return `${step}_status`;
+}
+
+function verifiedAtColumn(step: VerificationStep) {
+  return `${step}_verified_at`;
+}
+
+async function getVerificationWithDocuments(verificationId: string) {
+  if (!supabase) return null;
+  const { data: verification, error: verificationError } = await supabase
+    .from("candidate_verifications")
+    .select("*")
+    .eq("id", verificationId)
+    .maybeSingle();
+  if (verificationError) throw verificationError;
+  if (!verification) return null;
+
+  const { data: documents, error: documentsError } = await supabase
+    .from("candidate_verification_documents")
+    .select("*")
+    .eq("verification_id", verificationId)
+    .order("created_at", { ascending: true });
+  if (documentsError) throw documentsError;
+  return { verification, documents: documents || [] };
+}
+
+async function refreshOverallStatus(verificationId: string) {
+  if (!supabase) return;
+  const { data, error } = await supabase
+    .from("candidate_verifications")
+    .select("aadhaar_status,employment_status,police_status,payment_status")
+    .eq("id", verificationId)
+    .single();
+  if (error || !data) return;
+
+  const statuses = [data.aadhaar_status, data.employment_status, data.police_status];
+  let status = "draft";
+  if (statuses.includes("rejected")) status = "action_required";
+  else if (statuses.every((value) => value === "verified") && data.payment_status === "paid") status = "verified";
+  else if (statuses.some((value) => ["submitted", "under_review", "verified"].includes(value))) status = "under_review";
+
+  await supabase
+    .from("candidate_verifications")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", verificationId);
+}
 
 router.post("/", async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(503).json({
-        error: "Database is not configured",
-      });
-    }
-
-    const db = supabase;
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
 
     const {
       candidateId,
@@ -80,669 +99,316 @@ router.post("/", async (req, res) => {
       currentRole,
       experience,
       location,
-    } = req.body;
+      aadhaarLast4,
+      policeReferenceNumber,
+      policeIssueDate,
+      policeIssuingAuthority,
+      policeState,
+    } = req.body || {};
 
-    const id = crypto.randomUUID();
+    if (!fullName || !phone) return res.status(400).json({ error: "Full name and phone are required" });
 
-    const { data, error } = await db
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
       .from("candidate_verifications")
       .insert({
-        id,
+        id: crypto.randomUUID(),
         candidate_id: candidateId || null,
+        full_name: fullName,
+        phone,
+        current_role: currentRole || null,
+        experience: experience || null,
+        location: location || null,
+        aadhaar_last4: aadhaarLast4 || null,
+        police_reference_number: policeReferenceNumber || null,
+        police_issue_date: policeIssueDate || null,
+        police_issuing_authority: policeIssuingAuthority || null,
+        police_state: policeState || null,
         status: "draft",
+        aadhaar_status: "pending",
+        employment_status: "pending",
+        police_status: "pending",
         payment_status: "pending",
         amount: 999,
-        submitted_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: now,
+        updated_at: now,
       })
       .select("*")
       .single();
 
-    if (error) {
-      console.error("Create verification Supabase error:", error);
-
-      return res.status(500).json({
-        error: "Could not create verification request",
-        details: error.message,
-      });
-    }
-
-    return res.status(201).json({
-      message: "Verification request created",
-
-      data: {
-        ...data,
-        fullName,
-        phone,
-        currentRole,
-        experience,
-        location,
-      },
-    });
+    if (error) return res.status(500).json({ error: "Could not create verification request", details: error.message });
+    return res.status(201).json({ message: "Verification request created", data });
   } catch (error) {
     console.error("Create verification error:", error);
-
-    return res.status(500).json({
-      error: "Could not create verification request",
-    });
+    return res.status(500).json({ error: "Could not create verification request" });
   }
 });
 
+router.post("/:verificationId/documents", upload.single("document"), async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const { verificationId } = req.params;
+    const documentType = String(req.body.documentType || "");
 
-/* =========================================================
-   UPLOAD DOCUMENT
-========================================================= */
-
-router.post(
-  "/:verificationId/documents",
-  upload.single("document"),
-  async (req, res) => {
-    try {
-      if (!supabase) {
-        return res.status(503).json({
-          error: "Database is not configured",
-        });
-      }
-
-      const db = supabase;
-
-      const { verificationId } = req.params;
-      const documentType = req.body.documentType;
-
-      if (!req.file) {
-        return res.status(400).json({
-          error: "Document file is required",
-        });
-      }
-
-      if (!documentType) {
-        fs.unlinkSync(req.file.path);
-
-        return res.status(400).json({
-          error: "Document type is required",
-        });
-      }
-
-      const { data: verification, error: verificationError } =
-        await db
-          .from("candidate_verifications")
-          .select("id")
-          .eq("id", verificationId)
-          .maybeSingle();
-
-      if (verificationError) {
-        fs.unlinkSync(req.file.path);
-
-        return res.status(500).json({
-          error: verificationError.message,
-        });
-      }
-
-      if (!verification) {
-        fs.unlinkSync(req.file.path);
-
-        return res.status(404).json({
-          error: "Verification request not found",
-        });
-      }
-
-      const documentId = crypto.randomUUID();
-
-      const fileUrl =
-        `/uploads/passport-verification/${req.file.filename}`;
-
-      const { data, error } = await db
-        .from("candidate_verification_documents")
-        .insert({
-          id: documentId,
-          verification_id: verificationId,
-          document_type: documentType,
-          file_url: fileUrl,
-          status: "pending",
-          created_at: new Date().toISOString(),
-        })
-        .select("*")
-        .single();
-
-      if (error) {
-        console.error("Document DB insert error:", error);
-
-        return res.status(500).json({
-          error: "Could not save uploaded document",
-          details: error.message,
-        });
-      }
-
-      return res.status(201).json({
-        message: "Document uploaded",
-        data,
-      });
-    } catch (error) {
-      console.error(
-        "Upload verification document error:",
-        error,
-      );
-
-      return res.status(500).json({
-        error: "Could not upload verification document",
-      });
+    if (!req.file) return res.status(400).json({ error: "Document file is required" });
+    if (!documentType) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "Document type is required" });
     }
-  },
-);
 
+    const { data: verification, error: verificationError } = await supabase
+      .from("candidate_verifications")
+      .select("id")
+      .eq("id", verificationId)
+      .maybeSingle();
 
-/* =========================================================
-   SUBMIT FOR REVIEW
-========================================================= */
-
-router.patch(
-  "/:verificationId/submit",
-  async (req, res) => {
-    try {
-      if (!supabase) {
-        return res.status(503).json({
-          error: "Database is not configured",
-        });
-      }
-
-      const db = supabase;
-
-      const { verificationId } = req.params;
-
-      const requiredDocuments = [
-        "resume",
-        "government_id",
-        "education",
-      ];
-
-      const { data: documents, error: documentsError } =
-        await db
-          .from("candidate_verification_documents")
-          .select("document_type")
-          .eq("verification_id", verificationId);
-
-      if (documentsError) {
-        return res.status(500).json({
-          error: documentsError.message,
-        });
-      }
-
-      const uploadedTypes =
-        (documents || []).map(
-          (row: { document_type: string }) =>
-            row.document_type,
-        );
-
-      const missing = requiredDocuments.filter(
-        (type) => !uploadedTypes.includes(type),
-      );
-
-      if (missing.length) {
-        return res.status(400).json({
-          error: "Required documents are missing",
-          missing,
-        });
-      }
-
-      const { data, error } = await db
-        .from("candidate_verifications")
-        .update({
-          status: "under_review",
-          submitted_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", verificationId)
-        .select("*")
-        .maybeSingle();
-
-      if (error) {
-        return res.status(500).json({
-          error: error.message,
-        });
-      }
-
-      if (!data) {
-        return res.status(404).json({
-          error: "Verification not found",
-        });
-      }
-
-      return res.json({
-        message: "Verification submitted for review",
-        data,
-      });
-    } catch (error) {
-      console.error("Submit verification error:", error);
-
-      return res.status(500).json({
-        error: "Could not submit verification",
-      });
+    if (verificationError || !verification) {
+      fs.unlinkSync(req.file.path);
+      return res.status(verificationError ? 500 : 404).json({ error: verificationError?.message || "Verification request not found" });
     }
-  },
-);
 
+    const { data, error } = await supabase
+      .from("candidate_verification_documents")
+      .insert({
+        id: crypto.randomUUID(),
+        verification_id: verificationId,
+        document_type: documentType,
+        file_url: `/uploads/passport-verification/${req.file.filename}`,
+        status: "pending",
+        created_at: new Date().toISOString(),
+      })
+      .select("*")
+      .single();
 
-/* =========================================================
-   ADMIN LIST
-   IMPORTANT: keep admin routes BEFORE /:verificationId
-========================================================= */
+    if (error) return res.status(500).json({ error: "Could not save uploaded document", details: error.message });
+    return res.status(201).json({ message: "Document uploaded", data });
+  } catch (error) {
+    console.error("Upload verification document error:", error);
+    return res.status(500).json({ error: "Could not upload verification document" });
+  }
+});
 
-router.get(
-  "/admin/requests",
-  async (_req, res) => {
-    try {
-      if (!supabase) {
-        return res.status(503).json({
-          error: "Database is not configured",
-        });
+router.patch("/:verificationId/steps/:step/submit", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const verificationId = req.params.verificationId;
+    const step = req.params.step as VerificationStep;
+    if (!(step in STEP_DOCUMENTS)) return res.status(400).json({ error: "Invalid verification step" });
+
+    const { data: documents, error: documentsError } = await supabase
+      .from("candidate_verification_documents")
+      .select("document_type")
+      .eq("verification_id", verificationId);
+    if (documentsError) return res.status(500).json({ error: documentsError.message });
+
+    const uploaded = (documents || []).map((row: { document_type: string }) => row.document_type);
+    const missing = STEP_DOCUMENTS[step].filter((type) => !uploaded.includes(type));
+    if (missing.length) return res.status(400).json({ error: "Required documents are missing", missing });
+
+    const { data, error } = await supabase
+      .from("candidate_verifications")
+      .update({ [statusColumn(step)]: "submitted" as StepStatus, updated_at: new Date().toISOString() })
+      .eq("id", verificationId)
+      .select("*")
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    await refreshOverallStatus(verificationId);
+    return res.json({ message: `${step} verification submitted`, data });
+  } catch (error) {
+    console.error("Submit verification step error:", error);
+    return res.status(500).json({ error: "Could not submit verification step" });
+  }
+});
+
+router.patch("/:verificationId/submit", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const { verificationId } = req.params;
+    const details = await getVerificationWithDocuments(verificationId);
+    if (!details) return res.status(404).json({ error: "Verification not found" });
+
+    const uploaded = details.documents.map((row: any) => row.document_type);
+    const required = Object.values(STEP_DOCUMENTS).flat();
+    const missing = required.filter((type) => !uploaded.includes(type));
+    if (missing.length) return res.status(400).json({ error: "Required documents are missing", missing });
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("candidate_verifications")
+      .update({
+        aadhaar_status: details.verification.aadhaar_status === "pending" ? "submitted" : details.verification.aadhaar_status,
+        employment_status: details.verification.employment_status === "pending" ? "submitted" : details.verification.employment_status,
+        police_status: details.verification.police_status === "pending" ? "submitted" : details.verification.police_status,
+        status: "under_review",
+        submitted_at: now,
+        updated_at: now,
+      })
+      .eq("id", verificationId)
+      .select("*")
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ message: "Talent Passport verification submitted for review", data });
+  } catch (error) {
+    console.error("Submit full verification error:", error);
+    return res.status(500).json({ error: "Could not submit verification" });
+  }
+});
+
+router.get("/admin/requests", async (_req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const { data: verifications, error } = await supabase
+      .from("candidate_verifications")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const { data: documents } = await supabase.from("candidate_verification_documents").select("verification_id");
+    const countMap = new Map<string, number>();
+    (documents || []).forEach((document: { verification_id: string }) => {
+      countMap.set(document.verification_id, (countMap.get(document.verification_id) || 0) + 1);
+    });
+
+    return res.json({ data: (verifications || []).map((verification: any) => ({ ...verification, document_count: countMap.get(verification.id) || 0 })) });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Could not load verification requests" });
+  }
+});
+
+router.get("/admin/requests/:verificationId", async (req, res) => {
+  try {
+    const details = await getVerificationWithDocuments(req.params.verificationId);
+    if (!details) return res.status(404).json({ error: "Verification not found" });
+    return res.json({ data: details });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || "Could not load verification request" });
+  }
+});
+
+router.patch("/admin/requests/:verificationId/steps/:step/:decision", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const verificationId = req.params.verificationId;
+    const step = req.params.step as VerificationStep;
+    const decision = req.params.decision as "approve" | "reject";
+
+    if (!(step in STEP_DOCUMENTS)) return res.status(400).json({ error: "Invalid verification step" });
+    if (!["approve", "reject"].includes(decision)) return res.status(400).json({ error: "Invalid decision" });
+
+    const stepStatus: StepStatus = decision === "approve" ? "verified" : "rejected";
+    const update: Record<string, unknown> = { [statusColumn(step)]: stepStatus, updated_at: new Date().toISOString() };
+    if (decision === "approve") update[verifiedAtColumn(step)] = new Date().toISOString();
+    if (decision === "reject") update.rejection_reason = req.body?.reason || `${step} verification rejected`;
+
+    const { error } = await supabase.from("candidate_verifications").update(update).eq("id", verificationId);
+    if (error) return res.status(500).json({ error: error.message });
+    await refreshOverallStatus(verificationId);
+
+    const { data: refreshed, error: refreshError } = await supabase
+      .from("candidate_verifications")
+      .select("*")
+      .eq("id", verificationId)
+      .single();
+    if (refreshError || !refreshed) return res.status(500).json({ error: refreshError?.message || "Could not refresh verification" });
+
+    if (
+      refreshed.aadhaar_status === "verified" &&
+      refreshed.employment_status === "verified" &&
+      refreshed.police_status === "verified" &&
+      refreshed.payment_status === "paid"
+    ) {
+      const validUntil = addMonths(new Date(), 3);
+      await supabase.from("candidate_verifications").update({
+        status: "verified",
+        verified_at: new Date().toISOString(),
+        valid_until: validUntil.toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq("id", verificationId);
+
+      if (refreshed.candidate_id) {
+        await supabase.from("sn_candidates").update({
+          is_verified: true,
+          verification_valid_until: validUntil.toISOString(),
+          verification_priority: 1,
+        }).eq("id", refreshed.candidate_id);
       }
-
-      const db = supabase;
-
-      const { data: verifications, error } =
-        await db
-          .from("candidate_verifications")
-          .select("*")
-          .order("created_at", {
-            ascending: false,
-          });
-
-      if (error) {
-        return res.status(500).json({
-          error: error.message,
-        });
-      }
-
-      const { data: documents } = await db
-        .from("candidate_verification_documents")
-        .select("verification_id");
-
-      const countMap = new Map<string, number>();
-
-      (documents || []).forEach(
-        (document: { verification_id: string }) => {
-          const current =
-            countMap.get(document.verification_id) || 0;
-
-          countMap.set(
-            document.verification_id,
-            current + 1,
-          );
-        },
-      );
-
-      const result = (verifications || []).map(
-        (verification: any) => ({
-          ...verification,
-
-          document_count:
-            countMap.get(verification.id) || 0,
-        }),
-      );
-
-      return res.json({
-        data: result,
-      });
-    } catch (error) {
-      console.error(error);
-
-      return res.status(500).json({
-        error: "Could not load verification requests",
-      });
     }
-  },
-);
 
+    return res.json({ message: `${step} verification ${stepStatus}`, data: refreshed });
+  } catch (error) {
+    console.error("Update verification step error:", error);
+    return res.status(500).json({ error: "Could not update verification step" });
+  }
+});
 
-/* =========================================================
-   ADMIN DETAIL
-========================================================= */
+router.patch("/admin/requests/:verificationId/approve", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const verificationId = req.params.verificationId;
+    const validUntil = addMonths(new Date(), 3);
+    const { data: verification, error: verificationError } = await supabase
+      .from("candidate_verifications")
+      .select("*")
+      .eq("id", verificationId)
+      .single();
+    if (verificationError || !verification) return res.status(404).json({ error: "Verification not found" });
 
-router.get(
-  "/admin/requests/:verificationId",
-  async (req, res) => {
-    try {
-      if (!supabase) {
-        return res.status(503).json({
-          error: "Database is not configured",
-        });
-      }
+    const now = new Date().toISOString();
+    const { data, error } = await supabase.from("candidate_verifications").update({
+      status: "verified",
+      aadhaar_status: "verified",
+      employment_status: "verified",
+      police_status: "verified",
+      aadhaar_verified_at: now,
+      employment_verified_at: now,
+      police_verified_at: now,
+      verified_at: now,
+      valid_until: validUntil.toISOString(),
+      updated_at: now,
+    }).eq("id", verificationId).select("*").single();
+    if (error) return res.status(500).json({ error: error.message });
 
-      const db = supabase;
-
-      const { verificationId } = req.params;
-
-      const {
-        data: verification,
-        error: verificationError,
-      } = await db
-        .from("candidate_verifications")
-        .select("*")
-        .eq("id", verificationId)
-        .maybeSingle();
-
-      if (verificationError) {
-        return res.status(500).json({
-          error: verificationError.message,
-        });
-      }
-
-      if (!verification) {
-        return res.status(404).json({
-          error: "Verification not found",
-        });
-      }
-
-      const {
-        data: documents,
-        error: documentsError,
-      } = await db
-        .from("candidate_verification_documents")
-        .select("*")
-        .eq("verification_id", verificationId)
-        .order("created_at", {
-          ascending: true,
-        });
-
-      if (documentsError) {
-        return res.status(500).json({
-          error: documentsError.message,
-        });
-      }
-
-      return res.json({
-        data: {
-          verification,
-          documents: documents || [],
-        },
-      });
-    } catch (error) {
-      console.error(error);
-
-      return res.status(500).json({
-        error: "Could not load verification request",
-      });
+    if (verification.candidate_id) {
+      await supabase.from("sn_candidates").update({
+        is_verified: true,
+        verification_valid_until: validUntil.toISOString(),
+        verification_priority: 1,
+      }).eq("id", verification.candidate_id);
     }
-  },
-);
 
+    return res.json({ message: "Candidate fully verified", data });
+  } catch (error) {
+    console.error("Approve verification error:", error);
+    return res.status(500).json({ error: "Could not approve candidate" });
+  }
+});
 
-/* =========================================================
-   ADMIN APPROVE
-========================================================= */
+router.patch("/admin/requests/:verificationId/reject", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const { data, error } = await supabase.from("candidate_verifications").update({
+      status: "rejected",
+      rejection_reason: req.body?.reason || "Verification rejected",
+      updated_at: new Date().toISOString(),
+    }).eq("id", req.params.verificationId).select("*").single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ message: "Verification rejected", data });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Could not reject verification" });
+  }
+});
 
-router.patch(
-  "/admin/requests/:verificationId/approve",
-  async (req, res) => {
-    try {
-      if (!supabase) {
-        return res.status(503).json({
-          error: "Database is not configured",
-        });
-      }
-
-      const db = supabase;
-
-      const { verificationId } = req.params;
-
-      const {
-        data: verification,
-        error: verificationError,
-      } = await db
-        .from("candidate_verifications")
-        .select("*")
-        .eq("id", verificationId)
-        .maybeSingle();
-
-      if (verificationError) {
-        return res.status(500).json({
-          error: verificationError.message,
-        });
-      }
-
-      if (!verification) {
-        return res.status(404).json({
-          error: "Verification not found",
-        });
-      }
-
-      const verifiedAt = new Date();
-
-      const validUntil = new Date();
-
-      validUntil.setMonth(
-        validUntil.getMonth() + 3,
-      );
-
-      const {
-        data: updatedVerification,
-        error: updateError,
-      } = await db
-        .from("candidate_verifications")
-        .update({
-          status: "verified",
-
-          verified_at:
-            verifiedAt.toISOString(),
-
-          valid_until:
-            validUntil.toISOString(),
-
-          updated_at:
-            new Date().toISOString(),
-        })
-        .eq("id", verificationId)
-        .select("*")
-        .single();
-
-      if (updateError) {
-        return res.status(500).json({
-          error: updateError.message,
-        });
-      }
-
-      /*
-        Candidate record update.
-
-        Your existing main candidate table is:
-        sn_candidates
-
-        This assumes you have added these columns:
-        is_verified
-        verification_valid_until
-        verification_priority
-      */
-
-      if (verification.candidate_id) {
-        const {
-          error: candidateUpdateError,
-        } = await db
-          .from("sn_candidates")
-          .update({
-            is_verified: true,
-
-            verification_valid_until:
-              validUntil.toISOString(),
-
-            verification_priority: 1,
-          })
-          .eq(
-            "id",
-            verification.candidate_id,
-          );
-
-        if (candidateUpdateError) {
-          console.error(
-            "Candidate verification status update failed:",
-            candidateUpdateError,
-          );
-
-          return res.status(500).json({
-            error:
-              "Verification was approved but candidate profile could not be updated",
-
-            details:
-              candidateUpdateError.message,
-          });
-        }
-      }
-
-      return res.json({
-        message:
-          "Candidate verified successfully",
-
-        data: updatedVerification,
-      });
-    } catch (error) {
-      console.error(
-        "Approve verification error:",
-        error,
-      );
-
-      return res.status(500).json({
-        error:
-          "Could not approve candidate",
-      });
-    }
-  },
-);
-
-
-/* =========================================================
-   ADMIN REJECT
-========================================================= */
-
-router.patch(
-  "/admin/requests/:verificationId/reject",
-  async (req, res) => {
-    try {
-      if (!supabase) {
-        return res.status(503).json({
-          error: "Database is not configured",
-        });
-      }
-
-      const db = supabase;
-
-      const { verificationId } = req.params;
-
-      const { reason } = req.body;
-
-      const { data, error } = await db
-        .from("candidate_verifications")
-        .update({
-          status: "rejected",
-
-          rejection_reason:
-            reason ||
-            "Documents could not be verified",
-
-          updated_at:
-            new Date().toISOString(),
-        })
-        .eq("id", verificationId)
-        .select("*")
-        .maybeSingle();
-
-      if (error) {
-        return res.status(500).json({
-          error: error.message,
-        });
-      }
-
-      if (!data) {
-        return res.status(404).json({
-          error: "Verification not found",
-        });
-      }
-
-      return res.json({
-        message: "Verification rejected",
-        data,
-      });
-    } catch (error) {
-      console.error(error);
-
-      return res.status(500).json({
-        error: "Could not reject verification",
-      });
-    }
-  },
-);
-
-
-/* =========================================================
-   GET SINGLE VERIFICATION
-   Keep this AFTER admin routes.
-========================================================= */
-
-router.get(
-  "/:verificationId",
-  async (req, res) => {
-    try {
-      if (!supabase) {
-        return res.status(503).json({
-          error: "Database is not configured",
-        });
-      }
-
-      const db = supabase;
-
-      const { verificationId } = req.params;
-
-      const {
-        data: verification,
-        error: verificationError,
-      } = await db
-        .from("candidate_verifications")
-        .select("*")
-        .eq("id", verificationId)
-        .maybeSingle();
-
-      if (verificationError) {
-        return res.status(500).json({
-          error: verificationError.message,
-        });
-      }
-
-      if (!verification) {
-        return res.status(404).json({
-          error: "Verification not found",
-        });
-      }
-
-      const {
-        data: documents,
-        error: documentsError,
-      } = await db
-        .from("candidate_verification_documents")
-        .select("*")
-        .eq("verification_id", verificationId)
-        .order("created_at", {
-          ascending: true,
-        });
-
-      if (documentsError) {
-        return res.status(500).json({
-          error: documentsError.message,
-        });
-      }
-
-      return res.json({
-        data: {
-          verification,
-          documents: documents || [],
-        },
-      });
-    } catch (error) {
-      console.error(error);
-
-      return res.status(500).json({
-        error: "Could not load verification",
-      });
-    }
-  },
-);
+router.get("/:verificationId", async (req, res) => {
+  try {
+    const details = await getVerificationWithDocuments(req.params.verificationId);
+    if (!details) return res.status(404).json({ error: "Verification not found" });
+    return res.json({ data: details });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || "Could not load verification" });
+  }
+});
 
 export default router;
