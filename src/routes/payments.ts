@@ -38,7 +38,9 @@ router.post("/create-order", async (req, res) => {
     const planId = String(req.body?.planId || "") as PaidPlanId;
     const plan = PAID_PLANS[planId];
     if (!plan) return res.status(400).json({ error: "Invalid paid plan" });
-    if (plan.amount < 100) return res.status(400).json({ error: "Amount must be at least 100 paise" });
+
+    const baseAmount: number = Number(plan.amount);
+    if (baseAmount < 100) return res.status(400).json({ error: "Amount must be at least 100 paise" });
 
     const razorpayConfig = getRazorpayClient();
     if (!razorpayConfig) {
@@ -52,15 +54,15 @@ router.post("/create-order", async (req, res) => {
     }
 
     const couponCode = String(req.body?.couponCode || "").trim().toUpperCase();
-    let amount = plan.amount;
+    let amount: number = baseAmount;
     let discountAmount = 0;
     let appliedCoupon = "";
 
     if (couponCode) {
-      const couponResult = await validateCouponForOrder(couponCode, planId, plan.amount);
+      const couponResult = await validateCouponForOrder(couponCode, planId, baseAmount);
       if (!couponResult.valid) return res.status(400).json({ error: couponResult.error });
-      amount = couponResult.finalAmount;
-      discountAmount = couponResult.discountAmount;
+      amount = Number(couponResult.finalAmount);
+      discountAmount = Number(couponResult.discountAmount);
       appliedCoupon = couponResult.code;
     }
 
@@ -76,7 +78,7 @@ router.post("/create-order", async (req, res) => {
         planName: plan.name,
         verificationId,
         couponCode: appliedCoupon,
-        originalAmount: String(plan.amount),
+        originalAmount: String(baseAmount),
         discountAmount: String(discountAmount),
         source: planId === "talent-passport" ? "solarnaukri-talent-passport" : "solarnaukri-pricing",
       },
@@ -85,7 +87,7 @@ router.post("/create-order", async (req, res) => {
     return res.status(201).json({
       order_id: order.id,
       amount: order.amount,
-      original_amount: plan.amount,
+      original_amount: baseAmount,
       discount_amount: discountAmount,
       coupon_code: appliedCoupon || null,
       currency: order.currency,
