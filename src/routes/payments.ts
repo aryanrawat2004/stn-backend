@@ -1,6 +1,7 @@
 import { Router } from "express";
 import crypto from "crypto";
 import Razorpay from "razorpay";
+import { supabase } from "../db";
 
 const router = Router();
 
@@ -10,6 +11,7 @@ const PAID_PLANS = {
   growth: { amount: 299900, currency: "INR", name: "Growth" },
   pro: { amount: 999900, currency: "INR", name: "Pro" },
   "pro-plus": { amount: 2999900, currency: "INR", name: "Pro Plus" },
+  "talent-passport": { amount: 99900, currency: "INR", name: "Talent Passport Verification" },
 } as const;
 
 type PaidPlanId = keyof typeof PAID_PLANS;
@@ -17,26 +19,15 @@ type PaidPlanId = keyof typeof PAID_PLANS;
 function getRazorpayConfig() {
   const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
-
-  if (!keyId || !keySecret) {
-    return null;
-  }
-
+  if (!keyId || !keySecret) return null;
   return { keyId, keySecret };
 }
 
 function getRazorpayClient() {
   const config = getRazorpayConfig();
-
-  if (!config) {
-    return null;
-  }
-
+  if (!config) return null;
   return {
-    client: new Razorpay({
-      key_id: config.keyId,
-      key_secret: config.keySecret,
-    }),
+    client: new Razorpay({ key_id: config.keyId, key_secret: config.keySecret }),
     keyId: config.keyId,
   };
 }
@@ -45,17 +36,10 @@ router.post("/create-order", async (req, res) => {
   try {
     const planId = String(req.body?.planId || "") as PaidPlanId;
     const plan = PAID_PLANS[planId];
-
-    if (!plan) {
-      return res.status(400).json({ error: "Invalid paid plan" });
-    }
-
-    if (plan.amount < 100) {
-      return res.status(400).json({ error: "Amount must be at least 100 paise" });
-    }
+    if (!plan) return res.status(400).json({ error: "Invalid paid plan" });
+    if (plan.amount < 100) return res.status(400).json({ error: "Amount must be at least 100 paise" });
 
     const razorpayConfig = getRazorpayClient();
-
     if (!razorpayConfig) {
       return res.status(500).json({
         error: "Razorpay is not configured on the server",
@@ -66,6 +50,7 @@ router.post("/create-order", async (req, res) => {
       });
     }
 
+    const verificationId = req.body?.verificationId ? String(req.body.verificationId) : "";
     const receipt = `sn_${planId}_${Date.now()}`.slice(0, 40);
 
     const order = await razorpayConfig.client.orders.create({
@@ -75,7 +60,8 @@ router.post("/create-order", async (req, res) => {
       notes: {
         planId,
         planName: plan.name,
-        source: "solarnaukri-pricing",
+        verificationId,
+        source: planId === "talent-passport" ? "solarnaukri-talent-passport" : "solarnaukri-pricing",
       },
     });
 
@@ -89,13 +75,8 @@ router.post("/create-order", async (req, res) => {
     });
   } catch (error: any) {
     console.error("Razorpay create-order error:", error);
-
     const statusCode = Number(error?.statusCode || error?.status || 500);
-
-    if (statusCode === 401) {
-      return res.status(401).json({ error: "Razorpay authentication failed" });
-    }
-
+    if (statusCode === 401) return res.status(401).json({ error: "Razorpay authentication failed" });
     return res.status(500).json({
       error: "Could not create Razorpay order",
       details: process.env.NODE_ENV !== "production" ? error?.message || String(error) : undefined,
@@ -103,12 +84,14 @@ router.post("/create-order", async (req, res) => {
   }
 });
 
-router.post("/verify-payment", (req, res) => {
+router.post("/verify-payment", async (req, res) => {
   try {
     const {
       razorpay_payment_id,
       razorpay_order_id,
       razorpay_signature,
+      planId,
+      verificationId,
     } = req.body || {};
 
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
@@ -116,10 +99,7 @@ router.post("/verify-payment", (req, res) => {
     }
 
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
-
-    if (!keySecret) {
-      return res.status(500).json({ error: "Razorpay is not configured on the server" });
-    }
+    if (!keySecret) return res.status(500).json({ error: "Razorpay is not configured on the server" });
 
     const expectedSignature = crypto
       .createHmac("sha256", keySecret)
@@ -128,16 +108,28 @@ router.post("/verify-payment", (req, res) => {
 
     const expectedBuffer = Buffer.from(expectedSignature, "utf8");
     const receivedBuffer = Buffer.from(String(razorpay_signature), "utf8");
-
-    const matches =
-      expectedBuffer.length === receivedBuffer.length &&
-      crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
+    const matches = expectedBuffer.length === receivedBuffer.length && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 
     if (!matches) {
-      return res.status(400).json({
-        success: false,
-        error: "Payment signature verification failed",
-      });
+      return res.status(400).json({ success: false, error: "Payment signature verification failed" });
+    }
+
+    if (planId === "talent-passport" && verificationId) {
+      if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+      const { error: paymentUpdateError } = await supabase
+        .from("candidate_verifications")
+        .update({
+          payment_status: "paid",
+          payment_id: String(razorpay_payment_id),
+          payment_order_id: String(razorpay_order_id),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", String(verificationId));
+
+      if (paymentUpdateError) {
+        console.error("Talent Passport payment update failed:", paymentUpdateError);
+        return res.status(500).json({ error: "Payment verified but verification record could not be updated" });
+      }
     }
 
     return res.json({
