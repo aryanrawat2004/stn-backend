@@ -35,8 +35,17 @@ async function signedResumeUrl(candidate: Record<string, any>) {
   return storedUrl || null;
 }
 
+function sortCandidateRows(rows: any[]) {
+  return [...rows].sort((a, b) => {
+    const aDate = new Date(a.createdAt || a.created_at || a.joinedDate || 0).getTime();
+    const bDate = new Date(b.createdAt || b.created_at || b.joinedDate || 0).getTime();
+    return bDate - aDate;
+  });
+}
+
 // Admin candidate list is intentionally backed by the same sn_candidates table used by
-// candidate signup/profile APIs. This keeps candidate, admin and employer views in sync.
+// candidate signup/profile APIs. Supplemental tables must never prevent candidate records
+// from loading: applications and saved jobs are optional enrichment only.
 router.get("/", wrap(async (req, res) => {
   if (!supabase) return res.status(503).json({ error: "Database is not configured" });
 
@@ -46,30 +55,61 @@ router.get("/", wrap(async (req, res) => {
 
   const { data: candidateRows, error: candidateError } = await supabase
     .from("sn_candidates")
-    .select("*")
-    .order("createdAt", { ascending: false });
-  if (candidateError) throw candidateError;
+    .select("*");
 
-  const candidates = candidateRows || [];
+  if (candidateError) {
+    console.error("Admin candidate list failed to read sn_candidates:", candidateError);
+    return res.status(500).json({
+      error: "Could not load candidates",
+      details: {
+        code: candidateError.code,
+        message: candidateError.message,
+        hint: candidateError.hint,
+      },
+    });
+  }
+
+  const candidates = sortCandidateRows(candidateRows || []);
   const candidateIds = candidates.map((candidate: any) => candidate.id).filter(Boolean);
 
   let applications: any[] = [];
   let savedJobs: any[] = [];
+
   if (candidateIds.length) {
     const [applicationResult, savedJobsResult] = await Promise.all([
       supabase.from("sn_applications").select("candidateId").in("candidateId", candidateIds),
       supabase.from("sn_saved_jobs").select("candidateId").in("candidateId", candidateIds),
     ]);
-    if (applicationResult.error) throw applicationResult.error;
-    if (savedJobsResult.error) throw savedJobsResult.error;
-    applications = applicationResult.data || [];
-    savedJobs = savedJobsResult.data || [];
+
+    if (applicationResult.error) {
+      console.warn(
+        "Admin candidate list: sn_applications enrichment unavailable; continuing without application counts:",
+        applicationResult.error.message,
+      );
+    } else {
+      applications = applicationResult.data || [];
+    }
+
+    if (savedJobsResult.error) {
+      console.warn(
+        "Admin candidate list: sn_saved_jobs enrichment unavailable; continuing without saved-job counts:",
+        savedJobsResult.error.message,
+      );
+    } else {
+      savedJobs = savedJobsResult.data || [];
+    }
   }
 
   const applicationCounts = new Map<string, number>();
   const savedCounts = new Map<string, number>();
-  for (const item of applications) applicationCounts.set(String(item.candidateId), (applicationCounts.get(String(item.candidateId)) || 0) + 1);
-  for (const item of savedJobs) savedCounts.set(String(item.candidateId), (savedCounts.get(String(item.candidateId)) || 0) + 1);
+  for (const item of applications) {
+    const id = String(item.candidateId);
+    applicationCounts.set(id, (applicationCounts.get(id) || 0) + 1);
+  }
+  for (const item of savedJobs) {
+    const id = String(item.candidateId);
+    savedCounts.set(id, (savedCounts.get(id) || 0) + 1);
+  }
 
   const hydrated = await Promise.all(candidates.map(async (candidate: any) => ({
     ...candidate,
