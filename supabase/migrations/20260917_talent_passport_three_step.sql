@@ -14,14 +14,15 @@ alter table if exists candidate_verifications
   add column if not exists police_reference_number text,
   add column if not exists police_issue_date date,
   add column if not exists police_issuing_authority text,
-  add column if not exists police_state text;
+  add column if not exists police_state text,
+  add column if not exists payment_id text,
+  add column if not exists payment_order_id text;
 
 alter table if exists sn_candidates
   add column if not exists is_verified boolean not null default false,
   add column if not exists verification_valid_until timestamptz,
   add column if not exists verification_priority integer not null default 0;
 
--- Keep status values flexible for the existing installation, but seed the new workflow defaults.
 update candidate_verifications
 set
   aadhaar_status = coalesce(aadhaar_status, 'pending'),
