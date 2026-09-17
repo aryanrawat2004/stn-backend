@@ -45,7 +45,7 @@ insert into storage.buckets (id, name, public)
 values ('candidate-resumes', 'candidate-resumes', false)
 on conflict (id) do update set public = false;
 
--- Helpful indexes for live candidate/recruiter filtering.
+-- Helpful indexes for live candidate/Employer filtering.
 create index if not exists sn_jobs_status_idx on public.sn_jobs(status);
 create index if not exists sn_jobs_company_idx on public.sn_jobs(company);
 create index if not exists sn_applications_candidate_idx on public.sn_applications("candidateId");

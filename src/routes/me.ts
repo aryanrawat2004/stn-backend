@@ -130,7 +130,7 @@ async function ensureCandidate(auth: AuthContext) {
   return data;
 }
 
-async function ensureRecruiter(auth: AuthContext) {
+async function ensureEmployer(auth: AuthContext) {
   if (!supabase || !auth.email) return null;
   const { data, error } = await supabase
     .from("sn_employers")
@@ -464,7 +464,7 @@ router.get("/dashboard", wrap(async (req, res) => {
         shortlisted,
         interviews,
         savedJobs: (savedResult.data || []).length,
-        recruiterViews: Number(candidate.profileViews || 0),
+        EmployerViews: Number(candidate.profileViews || 0),
         jobMatches: matches.filter((item) => item.score >= 60).length,
       },
       recommendedJobs: matches.slice(0, 5),
@@ -485,23 +485,23 @@ router.get("/matches", wrap(async (req, res) => {
   res.json({ data });
 }));
 
-router.get("/recruiter", wrap(async (req, res) => {
+router.get("/Employer", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
   if (!auth) return;
-  const recruiter = await ensureRecruiter(auth);
-  if (!recruiter) return res.status(404).json({ error: "Recruiter profile not found for this email" });
-  res.json({ data: recruiter });
+  const Employer = await ensureEmployer(auth);
+  if (!Employer) return res.status(404).json({ error: "Employer profile not found for this email" });
+  res.json({ data: Employer });
 }));
 
-router.get("/recruiter/dashboard", wrap(async (req, res) => {
+router.get("/Employer/dashboard", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
   if (!auth) return;
-  const recruiter = await ensureRecruiter(auth);
-  if (!recruiter) return res.status(404).json({ error: "Recruiter profile not found for this email" });
+  const Employer = await ensureEmployer(auth);
+  if (!Employer) return res.status(404).json({ error: "Employer profile not found for this email" });
 
-  const jobsResult = await supabase!.from("sn_jobs").select("*").eq("company", recruiter.companyName).limit(200);
+  const jobsResult = await supabase!.from("sn_jobs").select("*").eq("company", Employer.companyName).limit(200);
   if (jobsResult.error) throw jobsResult.error;
   const jobs = jobsResult.data || [];
   const jobIds = jobs.map((job: any) => job.id);
@@ -515,7 +515,7 @@ router.get("/recruiter/dashboard", wrap(async (req, res) => {
 
   res.json({
     data: {
-      recruiter,
+      Employer,
       jobs,
       applications,
       metrics: {
@@ -529,14 +529,14 @@ router.get("/recruiter/dashboard", wrap(async (req, res) => {
   });
 }));
 
-router.get("/recruiter/applications", wrap(async (req, res) => {
+router.get("/Employer/applications", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
   if (!auth) return;
-  const recruiter = await ensureRecruiter(auth);
-  if (!recruiter) return res.status(404).json({ error: "Recruiter profile not found for this email" });
+  const Employer = await ensureEmployer(auth);
+  if (!Employer) return res.status(404).json({ error: "Employer profile not found for this email" });
 
-  const jobsResult = await supabase!.from("sn_jobs").select("*").eq("company", recruiter.companyName).limit(200);
+  const jobsResult = await supabase!.from("sn_jobs").select("*").eq("company", Employer.companyName).limit(200);
   if (jobsResult.error) throw jobsResult.error;
   const jobs = jobsResult.data || [];
   const jobIds = jobs.map((job: any) => job.id);

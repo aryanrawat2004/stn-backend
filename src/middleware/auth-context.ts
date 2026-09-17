@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import { supabase } from "../db";
 
-export type AppRole = "candidate" | "recruiter" | "ambassador" | "admin";
+export type AppRole = "candidate" | "Employer" | "ambassador" | "admin";
 
 export type AuthContext = {
   provider: "supabase" | "firebase" | "development";
@@ -13,7 +13,7 @@ export type AuthContext = {
 
 const allowedRoles = new Set<AppRole>([
   "candidate",
-  "recruiter",
+  "Employer",
   "ambassador",
   "admin",
 ]);

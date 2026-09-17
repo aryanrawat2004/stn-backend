@@ -4,6 +4,8 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import swaggerUi from "swagger-ui-express";
+import path from "path";
+import passportVerificationRoutes from "./routes/passportVerification";
 
 import employersRouter from "./routes/employers";
 import candidatesRouter from "./routes/candidates";
@@ -35,6 +37,12 @@ const adminWriteGuard = requireWriteRoles("admin");
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "16mb" }));
 
+app.use(
+  "/uploads",
+  express.static(path.join(process.cwd(), "uploads")),
+);
+
+
 app.get("/api-docs.json", (_req, res) => {
   res.json(swaggerSpec);
 });
@@ -56,6 +64,10 @@ app.use(
 app.use("/api/auth/linkedin", linkedinAuthRouter);
 app.use("/api/resources", resourcesPublicRouter);
 app.use("/api/pricing", pricingRouter);
+app.use(
+  "/api/passport-verification",
+  passportVerificationRoutes,
+);
 app.use("/api/jobs", jobsRouter);
 app.use("/api/talent", talentRouter);
 app.use("/api/me", meRouter);
@@ -66,7 +78,7 @@ app.use("/api/admin/resources", adminWriteGuard, resourcesAdminRouter);
 app.use("/api/admin/candidates", adminWriteGuard, candidatesRouter);
 app.use("/api/admin/job-seekers", adminWriteGuard, candidatesRouter);
 app.use("/api/admin/employers", adminWriteGuard, employersRouter);
-app.use("/api/admin/recruiters", adminWriteGuard, employersRouter);
+app.use("/api/admin/Employers", adminWriteGuard, employersRouter);
 app.use("/api/admin/companies", adminWriteGuard, companiesRouter);
 app.use("/api/admin/categories", adminWriteGuard, categoriesRouter);
 app.use("/api/admin/ambassadors", adminWriteGuard, ambassadorsRouter);
@@ -164,6 +176,9 @@ app.get("/health/schema", async (_req, res) => {
 });
 
 app.use((_req, res) => { res.status(404).json({ error: "Route not found" }); });
+console.log(
+  `🪪 Passport Verification API: http://localhost:${PORT}/api/passport-verification`
+);
 
 app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("Unhandled API error:", error);

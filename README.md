@@ -5,7 +5,7 @@ Express + TypeScript backend for the SolarNaukri admin platform.
 ## Features
 
 - Full CRUD APIs for jobs, candidates, employers, companies, categories, ambassadors, applications and activities
-- Recruiter and job-seeker aliases for the frontend user-role screens
+- Employer and job-seeker aliases for the frontend user-role screens
 - Job approval/status and featured controls
 - Candidate, employer and company verification/status controls
 - Company verification approval/rejection workflow
@@ -101,17 +101,17 @@ It creates the tables required for:
 - `PATCH /api/admin/jobs/:id/featured`
 - `DELETE /api/admin/jobs/:id`
 
-### Candidates / Job Seekers
+### Candidates / Employeess
 
 - CRUD: `/api/admin/candidates`
 - Alias: `/api/admin/job-seekers`
 - `PATCH /api/admin/candidates/:id/verify`
 - `PATCH /api/admin/candidates/:id/status`
 
-### Employers / Recruiters
+### Employers / Employers
 
 - CRUD: `/api/admin/employers`
-- Alias: `/api/admin/recruiters`
+- Alias: `/api/admin/Employers`
 - `PATCH /api/admin/employers/:id/verify`
 - `PATCH /api/admin/employers/:id/status`
 

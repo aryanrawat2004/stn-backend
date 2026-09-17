@@ -39,10 +39,8 @@ const plans: PricingPlan[] = [
     "After 10 resumes: ₹299 per resume"
   ],
 
-  note: "Launch offer includes 2 complimentary job posts with 5-day validity and access to 10 resumes. After the first 10 resumes, additional resume access is chargeable at ₹299 per resume.",
-
   ctaLabel: "Avail Complimentary Offer",
-  ctaHref: "/signup/recruiter?plan=free",
+  ctaHref: "/signup/Employer?plan=free",
 },
   {
     id: "single-job",
@@ -56,10 +54,10 @@ const plans: PricingPlan[] = [
       "1 additional job post",
       "Every job -stays live for 30 days",
       "Applicants dashboard",
-      "Recruiter dashboard",
+      "Employer dashboard",
     ],
     ctaLabel: "Post One Job",
-    ctaHref: "/signup/recruiter?plan=single-job",
+    ctaHref: "/signup/Employer?plan=single-job",
   },
   {
     id: "starter",
@@ -73,11 +71,11 @@ const plans: PricingPlan[] = [
       "3 job posts",
       "Every job stays live for 30 days",
       "Company profile",
-      "Applicants & recruiter dashboard",
+      "Applicants & Employer dashboard",
     ],
     recommended: true,
     ctaLabel: "Choose Starter",
-    ctaHref: "/signup/recruiter?plan=starter",
+    ctaHref: "/signup/Employer?plan=starter",
   },
 
   {
@@ -92,11 +90,11 @@ const plans: PricingPlan[] = [
       "7 job posts",
       "Every job stays live for 30 days",
       "Company branding",
-      "Applicants & recruiter dashboard",
+      "Applicants & Employer dashboard",
     ],
     recommended: false,
     ctaLabel: "Choose Growth",
-    ctaHref: "/signup/recruiter?plan=growth",
+    ctaHref: "/signup/Employer?plan=growth",
   },
   {
     id: "pro",
@@ -114,16 +112,16 @@ const plans: PricingPlan[] = [
       "Every job stays live for 30 days",
       "Talent database search",
       "Company branding",
-      "250 CV accesses",
-      "250 top CVs across 7 job postings"
+      "250 top CVs across 7 job postings",
+      "10 Talent Passports"
     ],
 
     bestseller: true,
 
-    note: "The Pro plan is valid for 3 months and includes 7 job postings with access to up to 250 CVs. Recruiters can search the talent database and receive up to 250 top CVs across the 7 job postings.",
+     
 
     ctaLabel: "Choose Pro",
-    ctaHref: "/signup/recruiter?plan=pro",
+    ctaHref: "/signup/Employer?plan=pro",
   },
   {
     id: "pro-plus",
@@ -133,23 +131,24 @@ const plans: PricingPlan[] = [
     priceLabel: "₹29,999",
     billingLabel: "/ 6 months",
 
-    jobAllowance: "15 job postings",
+    jobAllowance: "10 job postings",
     jobLiveDays: 30,
 
     features: [
-      "15 job postings",
+      "10 job postings",
       "Every job stays live for 30 days",
       "100 resume reviews per month",
-      "600 total resume reviews for 6 months",
+      "500 total resume reviews for 6 months",
       "Talent database search",
       "Company branding",
-      "Recruiter dashboard"
+      "Employer dashboard",
+      "50 Talent Passports"
     ],
 
-    note: "The Pro Plus plan is valid for 6 months and includes 15 job postings with 100 resume reviews every month, up to 600 resume reviews in total.",
+     
 
     ctaLabel: "Choose Pro Plus",
-    ctaHref: "/signup/recruiter?plan=pro-plus",
+    ctaHref: "/signup/Employer?plan=pro-plus",
   },
   {
     id: "enterprise",
@@ -165,7 +164,7 @@ const plans: PricingPlan[] = [
     features: [
       "Bulk hiring",
       "Every job stays live for 30 days",
-      "Multiple recruiter accounts",
+      "Multiple Employer accounts",
       "Dedicated hiring support"
     ],
 
