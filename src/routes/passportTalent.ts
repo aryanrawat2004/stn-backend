@@ -65,10 +65,7 @@ async function uploadResumeToSharePoint(file: Express.Multer.File, verification:
   const drive = drives.value?.find((item) => item.name.toLowerCase() === c.driveName.toLowerCase());
   if (!drive) throw new Error(`SharePoint document library '${c.driveName}' was not found`);
 
-  const safeName = String(verification.full_name || "candidate")
-    .replace(/[^a-zA-Z0-9 _-]/g, "")
-    .trim()
-    .replace(/\s+/g, "_") || "candidate";
+  const safeName = String(verification.full_name || "candidate").replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_") || "candidate";
   const ext = path.extname(file.originalname).toLowerCase() || ".pdf";
   const role = String(verification.current_role || "Solar_Candidate").replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_");
   const finalName = `${safeName}_${role}_${Date.now()}${ext}`;
@@ -86,16 +83,15 @@ async function uploadResumeToSharePoint(file: Express.Multer.File, verification:
 router.patch("/:verificationId/profile", async (req, res) => {
   try {
     if (!supabase) return res.status(503).json({ error: "Database is not configured" });
-    const allowed = {
-      police_reference_number: req.body?.policeReferenceNumber || null,
-      police_issue_date: req.body?.policeIssueDate || null,
-      police_issuing_authority: req.body?.policeIssuingAuthority || null,
-      police_state: req.body?.policeState || null,
-      updated_at: new Date().toISOString(),
-    };
     const { data, error } = await supabase
       .from("candidate_verifications")
-      .update(allowed)
+      .update({
+        police_reference_number: req.body?.policeReferenceNumber || null,
+        police_issue_date: req.body?.policeIssueDate || null,
+        police_issuing_authority: req.body?.policeIssuingAuthority || null,
+        police_state: req.body?.policeState || null,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", req.params.verificationId)
       .select("*")
       .single();
@@ -118,6 +114,19 @@ router.post("/:verificationId/resume", upload.single("resume"), async (req, res)
       .maybeSingle();
     if (verificationError || !verification) return res.status(verificationError ? 500 : 404).json({ error: verificationError?.message || "Verification not found" });
 
+    let candidateId = verification.candidate_id as string | null;
+    if (!candidateId && verification.phone) {
+      const { data: matchedCandidate } = await supabase
+        .from("sn_candidates")
+        .select("id")
+        .eq("phone", verification.phone)
+        .maybeSingle();
+      if (matchedCandidate?.id) {
+        candidateId = String(matchedCandidate.id);
+        await supabase.from("candidate_verifications").update({ candidate_id: candidateId, updated_at: new Date().toISOString() }).eq("id", verification.id);
+      }
+    }
+
     const sharepoint = await uploadResumeToSharePoint(req.file, verification);
     const { data: document, error: documentError } = await supabase
       .from("candidate_verification_documents")
@@ -133,18 +142,18 @@ router.post("/:verificationId/resume", upload.single("resume"), async (req, res)
       .single();
     if (documentError) return res.status(500).json({ error: documentError.message });
 
-    if (verification.candidate_id) {
+    if (candidateId) {
       await supabase
         .from("sn_candidates")
         .update({ resumeUrl: sharepoint.webUrl, resumeName: sharepoint.name, updatedAt: new Date().toISOString() })
-        .eq("id", verification.candidate_id);
+        .eq("id", candidateId);
     }
 
     try { await loadSharePointTalent(true); } catch (refreshError) { console.warn("Talent cache refresh after resume upload failed:", refreshError); }
 
     return res.status(201).json({
       message: "Resume saved to verification database and SharePoint talent pool",
-      data: { document, sharepoint },
+      data: { document, sharepoint, candidateId },
     });
   } catch (error: any) {
     console.error("Talent Passport SharePoint resume upload error:", error);
