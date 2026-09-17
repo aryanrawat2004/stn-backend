@@ -3,6 +3,7 @@ import multer from "multer";
 import crypto from "crypto";
 import path from "path";
 import { supabase } from "../db";
+import { loadSharePointTalent } from "../services/sharepoint-talent";
 
 const router = Router();
 const upload = multer({
@@ -69,20 +70,41 @@ async function uploadResumeToSharePoint(file: Express.Multer.File, verification:
     .trim()
     .replace(/\s+/g, "_") || "candidate";
   const ext = path.extname(file.originalname).toLowerCase() || ".pdf";
-  const finalName = `${safeName}_${Date.now()}${ext}`;
+  const role = String(verification.current_role || "Solar_Candidate").replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_");
+  const finalName = `${safeName}_${role}_${Date.now()}${ext}`;
   const encodedPath = `${c.rootFolder}/${finalName}`.split("/").filter(Boolean).map(encodeURIComponent).join("/");
   const response = await fetch(`https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(drive.id)}/root:/${encodedPath}:/content`, {
     method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": file.mimetype || "application/octet-stream",
-    },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": file.mimetype || "application/octet-stream" },
     body: file.buffer,
   });
   const result: any = await response.json();
   if (!response.ok) throw new Error(result?.error?.message || `SharePoint upload failed (${response.status})`);
   return { id: result.id as string, webUrl: result.webUrl as string, name: result.name as string };
 }
+
+router.patch("/:verificationId/profile", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const allowed = {
+      police_reference_number: req.body?.policeReferenceNumber || null,
+      police_issue_date: req.body?.policeIssueDate || null,
+      police_issuing_authority: req.body?.policeIssuingAuthority || null,
+      police_state: req.body?.policeState || null,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase
+      .from("candidate_verifications")
+      .update(allowed)
+      .eq("id", req.params.verificationId)
+      .select("*")
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ data });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || "Could not update verification profile" });
+  }
+});
 
 router.post("/:verificationId/resume", upload.single("resume"), async (req, res) => {
   try {
@@ -97,7 +119,6 @@ router.post("/:verificationId/resume", upload.single("resume"), async (req, res)
     if (verificationError || !verification) return res.status(verificationError ? 500 : 404).json({ error: verificationError?.message || "Verification not found" });
 
     const sharepoint = await uploadResumeToSharePoint(req.file, verification);
-
     const { data: document, error: documentError } = await supabase
       .from("candidate_verification_documents")
       .insert({
@@ -115,13 +136,11 @@ router.post("/:verificationId/resume", upload.single("resume"), async (req, res)
     if (verification.candidate_id) {
       await supabase
         .from("sn_candidates")
-        .update({
-          resumeUrl: sharepoint.webUrl,
-          resumeName: sharepoint.name,
-          updatedAt: new Date().toISOString(),
-        })
+        .update({ resumeUrl: sharepoint.webUrl, resumeName: sharepoint.name, updatedAt: new Date().toISOString() })
         .eq("id", verification.candidate_id);
     }
+
+    try { await loadSharePointTalent(true); } catch (refreshError) { console.warn("Talent cache refresh after resume upload failed:", refreshError); }
 
     return res.status(201).json({
       message: "Resume saved to verification database and SharePoint talent pool",
