@@ -494,7 +494,7 @@ router.get("/Employer", wrap(async (req, res) => {
   res.json({ data: Employer });
 }));
 
-router.get("/Employer/dashboard", wrap(async (req, res) => {
+router.get("/employer/dashboard", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
   if (!auth) return;
