@@ -6,6 +6,7 @@ import cors from "cors";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 import passportVerificationRoutes from "./routes/passportVerification";
+import passportTalentRouter from "./routes/passportTalent";
 
 import employersRouter from "./routes/employers";
 import candidatesRouter from "./routes/candidates";
@@ -40,28 +41,13 @@ const adminWriteGuard = requireWriteRoles("admin");
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "16mb" }));
 
-app.use(
-  "/uploads",
-  express.static(path.join(process.cwd(), "uploads")),
-);
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-app.get("/api-docs.json", (_req, res) => {
-  res.json(swaggerSpec);
-});
-
-app.use(
-  "/api-docs",
-  swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, {
-    customSiteTitle: "SolarNaukri API Documentation",
-    swaggerOptions: {
-      persistAuthorization: true,
-      displayRequestDuration: true,
-      filter: true,
-      tryItOutEnabled: true,
-    },
-  }),
-);
+app.get("/api-docs.json", (_req, res) => { res.json(swaggerSpec); });
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customSiteTitle: "SolarNaukri API Documentation",
+  swaggerOptions: { persistAuthorization: true, displayRequestDuration: true, filter: true, tryItOutEnabled: true },
+}));
 
 app.use("/api/auth/linkedin", linkedinAuthRouter);
 app.use("/api/resources", resourcesPublicRouter);
@@ -69,10 +55,8 @@ app.use("/api/pricing", pricingRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/coupons", couponsPublicRouter);
 app.use("/api/cv-usage", cvUsageRouter);
-app.use(
-  "/api/passport-verification",
-  passportVerificationRoutes,
-);
+app.use("/api/passport-verification", passportVerificationRoutes);
+app.use("/api/passport-talent", passportTalentRouter);
 app.use("/api/jobs", jobsRouter);
 app.use("/api/talent", talentRouter);
 app.use("/api/me", meRouter);
@@ -108,10 +92,7 @@ app.get("/health/db", async (_req, res) => {
 });
 
 app.get("/health/schema", async (_req, res) => {
-  if (!supabase) {
-    return res.status(503).json({ status: "error", database: databaseMode, error: "Supabase client is not configured" });
-  }
-
+  if (!supabase) return res.status(503).json({ status: "error", database: databaseMode, error: "Supabase client is not configured" });
   const db = supabase!;
   const requiredTables: Record<string, string> = {
     sn_jobs: 'id,role,company,location,type,status,createdAt,updatedAt',
@@ -128,14 +109,10 @@ app.get("/health/schema", async (_req, res) => {
     site_visits: 'id,visitor_id,session_id,user_id,path,started_at,last_seen,active_seconds,device,referrer',
     sn_coupons: 'id,code,discount_type,discount_value,applicable_plans,min_order_amount,max_uses,used_count,active,created_at,updated_at',
   };
-
-  const checks = await Promise.all(
-    Object.entries(requiredTables).map(async ([table, columns]) => {
-      const { error } = await db.from(table).select(columns).limit(1);
-      return { table, ok: !error, error: error ? { code: error.code, message: error.message, hint: error.hint } : null };
-    }),
-  );
-
+  const checks = await Promise.all(Object.entries(requiredTables).map(async ([table, columns]) => {
+    const { error } = await db.from(table).select(columns).limit(1);
+    return { table, ok: !error, error: error ? { code: error.code, message: error.message, hint: error.hint } : null };
+  }));
   const { data: buckets, error: bucketError } = await db.storage.listBuckets();
   const resourcesBucket = buckets?.find((bucket) => bucket.id === "resources");
   const resumesBucket = buckets?.find((bucket) => bucket.id === "candidate-resumes");
@@ -145,20 +122,12 @@ app.get("/health/schema", async (_req, res) => {
     resumesBucket: resumesBucket ? { id: resumesBucket.id, name: resumesBucket.name, public: resumesBucket.public } : null,
     error: bucketError ? bucketError.message : !resourcesBucket ? "resources bucket is missing" : !resumesBucket ? "candidate-resumes bucket is missing" : null,
   };
-
   const failedTables = checks.filter((check) => !check.ok);
   const ok = failedTables.length === 0 && storage.ok;
-  return res.status(ok ? 200 : 500).json({
-    status: ok ? "ok" : "error",
-    database: databaseMode,
-    tables: checks,
-    storage,
-    summary: { checkedTables: checks.length, passedTables: checks.length - failedTables.length, failedTables: failedTables.map((check) => check.table) },
-  });
+  return res.status(ok ? 200 : 500).json({ status: ok ? "ok" : "error", database: databaseMode, tables: checks, storage, summary: { checkedTables: checks.length, passedTables: checks.length - failedTables.length, failedTables: failedTables.map((check) => check.table) } });
 });
 
 app.use((_req, res) => { res.status(404).json({ error: "Route not found" }); });
-
 app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("Unhandled API error:", error);
   const payload: Record<string, unknown> = { error: "Internal server error" };
@@ -181,6 +150,7 @@ app.listen(PORT, () => {
   console.log(`🎟️ Coupon API: http://localhost:${PORT}/api/coupons`);
   console.log(`📊 CV usage API: http://localhost:${PORT}/api/cv-usage`);
   console.log(`🪪 Passport Verification API: http://localhost:${PORT}/api/passport-verification`);
+  console.log(`📤 Passport Talent Sync: http://localhost:${PORT}/api/passport-talent`);
   console.log(`👤 Candidate self API: http://localhost:${PORT}/api/me/candidate`);
   console.log(`💼 Public jobs API: http://localhost:${PORT}/api/jobs`);
   console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
