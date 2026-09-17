@@ -1,4 +1,4 @@
-import { Router } from "express";
+﻿import { Router } from "express";
 import { supabase } from "../db";
 import {
   listSharePointTalentFolders,
@@ -7,6 +7,12 @@ import {
   sharePointTalentConfig,
   type SharePointTalentItem,
 } from "../services/sharepoint-talent";
+import {
+  fetchAiCandidates,
+  getAiCandidatePdfUrl,
+  isSolarCandidate,
+  getResumeScreenerConfig,
+} from "../services/resume-screener";
 
 const router = Router();
 
@@ -14,58 +20,128 @@ type ExperienceFilter = "all" | "fresher" | "1-3" | "3-5" | "5-8" | "8+";
 type WorkTypeFilter = "all" | "on-site" | "hybrid" | "remote";
 type SortMode = "match" | "experience" | "name";
 
+export type UnifiedTalentItem = SharePointTalentItem & {
+  resume_text?: string;
+  sourceType?: "solarnaukri" | "sharepoint" | "resume_ai";
+};
+
 function normalise(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
 
-async function resolveCandidateResumeUrl(value: unknown) {
-  const raw = String(value || "");
-  const prefix = "storage://candidate-resumes/";
-  if (!raw.startsWith(prefix) || !supabase) return raw;
+async function resolveCandidateResumeUrl(row: any): Promise<string> {
+  const path = String(row.resumePath || row.resumeUrl || "").trim();
+  if (!path) return "";
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
 
-  const storagePath = raw.slice(prefix.length);
-  const { data, error } = await supabase.storage
-    .from("candidate-resumes")
-    .createSignedUrl(storagePath, 60 * 60);
+  if (!supabase) return "";
 
-  if (error) {
-    console.error("Could not sign candidate resume URL:", error.message);
+  const storagePath = path.startsWith("storage://candidate-resumes/")
+    ? path.slice("storage://candidate-resumes/".length)
+    : path;
+
+  try {
+    const { data, error } = await supabase.storage
+      .from("candidate-resumes")
+      .createSignedUrl(storagePath, 60 * 60);
+
+    if (error) {
+      console.warn("Could not sign candidate resume URL:", error.message);
+      return "";
+    }
+    return data.signedUrl;
+  } catch (err: any) {
+    console.warn("Signed URL exception:", err.message);
     return "";
   }
-
-  return data.signedUrl;
 }
 
-async function loadSolarNaukriCandidates(): Promise<SharePointTalentItem[]> {
+async function loadSolarNaukriCandidates(): Promise<UnifiedTalentItem[]> {
   if (!supabase) return [];
 
-  const { data, error } = await supabase
-    .from("sn_candidates")
-    .select("*")
-    .order("createdAt", { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from("sn_candidates")
+      .select("*")
+      .order("createdAt", { ascending: false });
 
-  if (error) {
-    console.error("Failed to load SolarNaukri candidate records:", error.message);
+    if (error) {
+      console.warn("Failed to load SolarNaukri candidate records:", error.message);
+      return [];
+    }
+
+    const rows = (data || []).filter((row: any) => String(row.accountStatus || "Active").toLowerCase() !== "suspended");
+
+    return Promise.all(
+      rows.map(async (row: any) => ({
+        id: `sn-${row.id}`,
+        name: String(row.name || "Solar Candidate"),
+        role: String(row.role || "Solar Candidate"),
+        domain: "Solar",
+        location: String(row.location || "India"),
+        experience: String(row.experience || "Not specified"),
+        skills: Array.isArray(row.skills) ? row.skills.map(String) : [],
+        resumeUrl: await resolveCandidateResumeUrl(row),
+        fileName: String(row.resumeName || `${row.name || "Candidate"}_CV.pdf`),
+        folderName: "Solar Portal Signups",
+        source: "sharepoint" as const,
+        resume_text: `${row.role || ""} ${row.about || ""} ${(row.skills || []).join(" ")}`,
+        sourceType: "solarnaukri" as const,
+      })),
+    );
+  } catch (err: any) {
+    console.warn("Exception loading SolarNaukri candidates:", err.message);
     return [];
   }
+}
 
-  const rows = (data || []).filter((row: any) => String(row.accountStatus || "Active").toLowerCase() !== "suspended");
+async function loadAiResumes(searchTerm?: string, experience?: ExperienceFilter): Promise<UnifiedTalentItem[]> {
+  try {
+    let minExp: number | undefined;
+    let maxExp: number | undefined;
 
-  return Promise.all(
-    rows.map(async (row: any) => ({
-      id: `sn-${row.id}`,
-      name: String(row.name || "Solar Candidate"),
-      role: String(row.role || "Solar Candidate"),
-      domain: "Solar / Renewable Energy",
-      location: String(row.location || "India"),
-      experience: String(row.experience || "Not specified"),
-      skills: Array.isArray(row.skills) ? row.skills.map(String) : [],
-      resumeUrl: await resolveCandidateResumeUrl(row.resumeUrl),
-      fileName: String(row.resumeName || "SolarNaukri candidate resume"),
-      folderName: "SolarNaukri Signups",
+    if (experience === "fresher") {
+      minExp = 0;
+      maxExp = 1;
+    } else if (experience === "1-3") {
+      minExp = 1;
+      maxExp = 3;
+    } else if (experience === "3-5") {
+      minExp = 3;
+      maxExp = 5;
+    } else if (experience === "5-8") {
+      minExp = 5;
+      maxExp = 8;
+    } else if (experience === "8+") {
+      minExp = 8;
+    }
+
+    const { candidates } = await fetchAiCandidates({
+      searchTerm: searchTerm || undefined,
+      minExp,
+      maxExp,
+      limit: 100,
+    });
+
+    return candidates.map((c) => ({
+      id: `ai-${c.candidate_id}`,
+      name: c.name || "Solar Candidate",
+      role: c.current_role && c.current_role !== "Candidate Profile" ? c.current_role : "Solar Candidate",
+      domain: "Solar",
+      location: c.location && c.location !== "N/A" ? c.location : "India",
+      experience: c.years_experience ? `${c.years_experience} years` : "Not specified",
+      skills: Array.isArray(c.skills) && c.skills.length ? c.skills : ["Solar"],
+      resumeUrl: getAiCandidatePdfUrl(c.candidate_id),
+      fileName: `${(c.name || "Candidate").replace(/[^a-zA-Z0-9_-]/g, "_")}_CV.pdf`,
+      folderName: "Solar",
       source: "sharepoint" as const,
-    })),
-  );
+      resume_text: c.resume_text,
+      sourceType: "resume_ai" as const,
+    }));
+  } catch (err: any) {
+    console.warn("Exception loading AI resumes:", err.message);
+    return [];
+  }
 }
 
 function extractYears(value?: string | null) {
@@ -82,13 +158,13 @@ function extractYears(value?: string | null) {
   return null;
 }
 
-function inferExperience(item: SharePointTalentItem) {
+function inferExperience(item: UnifiedTalentItem) {
   const explicit = extractYears(item.experience);
   if (explicit !== null) return explicit;
   return extractYears(`${item.name} ${item.fileName}`);
 }
 
-function experienceBucket(item: SharePointTalentItem): ExperienceFilter | "unknown" {
+function experienceBucket(item: UnifiedTalentItem): ExperienceFilter | "unknown" {
   const years = inferExperience(item);
   if (years === null) return "unknown";
   if (years < 1) return "fresher";
@@ -98,7 +174,7 @@ function experienceBucket(item: SharePointTalentItem): ExperienceFilter | "unkno
   return "8+";
 }
 
-function inferWorkType(item: SharePointTalentItem): Exclude<WorkTypeFilter, "all"> | "unknown" {
+function inferWorkType(item: UnifiedTalentItem): Exclude<WorkTypeFilter, "all"> | "unknown" {
   const text = [
     item.name,
     item.role,
@@ -106,6 +182,7 @@ function inferWorkType(item: SharePointTalentItem): Exclude<WorkTypeFilter, "all
     item.location,
     item.fileName,
     item.folderName,
+    item.resume_text || "",
     ...item.skills,
   ]
     .join(" ")
@@ -140,7 +217,7 @@ function tokenize(value: string) {
     .filter((term) => term.length > 1 && !stop.has(term));
 }
 
-function scoreSearch(item: SharePointTalentItem, search: string) {
+function scoreSearch(item: UnifiedTalentItem, search: string) {
   if (!search) return 0;
   const terms = search.split(/\s+/).filter(Boolean);
   let score = 0;
@@ -152,13 +229,14 @@ function scoreSearch(item: SharePointTalentItem, search: string) {
     if (normalise(item.experience).includes(term)) score += 4;
     if (normalise(item.location).includes(term)) score += 4;
     if (normalise(item.fileName).includes(term)) score += 3;
+    if (normalise(item.resume_text).includes(term)) score += 5;
     if (normalise(item.folderName).includes(term)) score += 2;
   }
 
   return score;
 }
 
-function roleMatchScore(item: SharePointTalentItem, jobRole: string) {
+function roleMatchScore(item: UnifiedTalentItem, jobRole: string) {
   if (!jobRole) return { score: 0, reasons: [] as string[] };
 
   const role = normalise(jobRole);
@@ -167,13 +245,14 @@ function roleMatchScore(item: SharePointTalentItem, jobRole: string) {
   const nameText = normalise(item.name);
   const fileText = normalise(item.fileName);
   const folderText = normalise(item.folderName);
+  const resumeText = normalise(item.resume_text);
   const skillText = item.skills.map(normalise).join(" ");
-  const haystack = [roleText, nameText, fileText, folderText, skillText, normalise(item.domain)].join(" ");
+  const haystack = [roleText, nameText, fileText, folderText, skillText, resumeText, normalise(item.domain)].join(" ");
 
   let score = 0;
   const reasons: string[] = [];
 
-  if (role && (roleText.includes(role) || fileText.includes(role) || nameText.includes(role))) {
+  if (role && (roleText.includes(role) || fileText.includes(role) || nameText.includes(role) || resumeText.includes(role))) {
     score += 45;
     reasons.push("Exact or near-exact role wording found");
   }
@@ -185,7 +264,21 @@ function roleMatchScore(item: SharePointTalentItem, jobRole: string) {
     if (matchedTerms.length) reasons.push(`${matchedTerms.length}/${terms.length} role keywords matched`);
   }
 
-  const solarSignals = ["solar", "pv", "epc", "bess", "scada", "rooftop", "electrical", "sales", "operation", "technician", "design"];
+  const solarSignals = [
+    "solar",
+    "pv",
+    "epc",
+    "bess",
+    "scada",
+    "rooftop",
+    "electrical",
+    "sales",
+    "operation",
+    "technician",
+    "design",
+    "pvsyst",
+    "autocad",
+  ];
   const roleSignals = solarSignals.filter((term) => role.includes(term));
   const matchingSignals = roleSignals.filter((term) => haystack.includes(term));
   if (roleSignals.length) {
@@ -196,7 +289,7 @@ function roleMatchScore(item: SharePointTalentItem, jobRole: string) {
   return { score: Math.min(100, score), reasons };
 }
 
-function experienceFitScore(item: SharePointTalentItem, requested: ExperienceFilter) {
+function experienceFitScore(item: UnifiedTalentItem, requested: ExperienceFilter) {
   if (requested === "all") return { score: 0, reason: "" };
   const bucket = experienceBucket(item);
   if (bucket === requested) return { score: 15, reason: "Experience range matches" };
@@ -204,14 +297,14 @@ function experienceFitScore(item: SharePointTalentItem, requested: ExperienceFil
   return { score: 2, reason: "" };
 }
 
-function workTypeFitScore(item: SharePointTalentItem, requested: WorkTypeFilter) {
+function workTypeFitScore(item: UnifiedTalentItem, requested: WorkTypeFilter) {
   if (requested === "all") return { score: 0, reason: "" };
   const inferred = inferWorkType(item);
   if (inferred === requested) return { score: 8, reason: "Work preference matches" };
   return { score: 0, reason: "" };
 }
 
-function locationFitScore(item: SharePointTalentItem, requested: string) {
+function locationFitScore(item: UnifiedTalentItem, requested: string) {
   if (!requested || requested === "all") return { score: 0, reason: "" };
   const candidateLocation = normalise(item.location);
   if (candidateLocation === requested || candidateLocation.includes(requested) || requested.includes(candidateLocation)) {
@@ -221,7 +314,16 @@ function locationFitScore(item: SharePointTalentItem, requested: string) {
 }
 
 router.get("/status", (_req, res) => {
-  res.json({ data: sharePointTalentConfig });
+  const screener = getResumeScreenerConfig();
+  res.json({
+    data: {
+      ...sharePointTalentConfig,
+      resumeScreener: {
+        configured: screener.enabled,
+        url: screener.url,
+      },
+    },
+  });
 });
 
 router.get("/folders", async (req, res) => {
@@ -240,6 +342,33 @@ router.get("/folders", async (req, res) => {
   }
 });
 
+router.get("/pdf/:candidateId", async (req, res) => {
+  try {
+    const { candidateId } = req.params;
+    const cleanId = candidateId.replace(/^ai-/, "");
+    const aiUrl = getAiCandidatePdfUrl(cleanId);
+    const config = getResumeScreenerConfig();
+
+    const pdfRes = await fetch(aiUrl, {
+      headers: {
+        "X-API-Key": config.apiKey,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!pdfRes.ok) {
+      return res.status(pdfRes.status).json({ error: "Failed to fetch candidate PDF" });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="candidate-${cleanId}.pdf"`);
+    const arrayBuffer = await pdfRes.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    res.status(502).json({ error: "Could not stream candidate PDF", details: err.message });
+  }
+});
+
 router.get("/sharepoint", async (req, res) => {
   try {
     const search = normalise(req.query.search);
@@ -254,11 +383,41 @@ router.get("/sharepoint", async (req, res) => {
     const limit = top ? 10 : Math.max(0, Math.min(1000, requestedLimit));
     const force = String(req.query.refresh || "") === "1";
 
+    // 1. SharePoint resumes (Solar folder)
     const sharePointRecords = folder
       ? await loadSharePointTalentFolder(folder, force)
       : await loadSharePointTalent(force);
+
+    // 2. SolarNaukri registered candidates (entered on this site)
     const solarNaukriRecords = await loadSolarNaukriCandidates();
-    const records = [...solarNaukriRecords, ...sharePointRecords];
+
+    // 3. AI Resume Screener candidates (filtered strictly for Solar domain)
+    const aiRecords = await loadAiResumes(search, experience);
+
+    // Unified candidate pool with SolarNaukri signups prioritized
+    const seenNames = new Set<string>();
+    const rawUnified: UnifiedTalentItem[] = [];
+
+    for (const item of [...solarNaukriRecords, ...sharePointRecords, ...aiRecords]) {
+      const key = normalise(item.name);
+      if (key && seenNames.has(key)) continue;
+      if (key) seenNames.add(key);
+      rawUnified.push(item);
+    }
+
+    // STRICT SOLAR DOMAIN REQUIREMENT: Only keep resumes with verified solar relevance
+    const records = rawUnified.filter((item) =>
+      isSolarCandidate({
+        name: item.name,
+        role: item.role,
+        domain: item.domain,
+        skills: item.skills,
+        resume_text: item.resume_text,
+        fileName: item.fileName,
+        folderName: item.folderName,
+        source: item.sourceType === "solarnaukri" ? "solarnaukri" : undefined,
+      }),
+    );
 
     const ranked = records
       .map((item) => {
@@ -270,6 +429,7 @@ router.get("/sharepoint", async (req, res) => {
           item.experience,
           item.fileName,
           item.folderName,
+          item.resume_text || "",
           ...item.skills,
         ]
           .join(" ")
@@ -344,7 +504,7 @@ router.get("/sharepoint", async (req, res) => {
         locations,
         selectedFolder: folder || null,
         filters: { search, jobRole, experience, workType, location, sort, limit, top },
-        source: "sharepoint+solarnaukri",
+        source: "resume_screener+sharepoint+solarnaukri",
       },
     });
   } catch (error: any) {
@@ -353,7 +513,7 @@ router.get("/sharepoint", async (req, res) => {
       error: error?.message || "Failed to load talent records",
       details: error?.message,
       data: [],
-      meta: { total: 0, allTotal: 0, folders: [], locations: [], source: "sharepoint+solarnaukri" },
+      meta: { total: 0, allTotal: 0, folders: [], locations: [], source: "resume_screener+sharepoint+solarnaukri" },
     });
   }
 });

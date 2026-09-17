@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
 import { supabase } from "../db";
 import { resolveAuthContext, AuthContext } from "../middleware/auth-context";
+import { indexCandidateIntoAi } from "../services/resume-screener";
 
 const router = Router();
 
@@ -192,6 +193,17 @@ router.patch("/candidate", wrap(async (req, res) => {
     .select("*")
     .single();
   if (error) throw error;
+
+  indexCandidateIntoAi({
+    id: data.id,
+    name: data.name,
+    resume_text: `${data.role || ""} ${data.about || ""} ${(data.skills || []).join(" ")}`,
+    skills: Array.isArray(data.skills) ? data.skills : [],
+    years_experience: Number(String(data.experience || "").replace(/\D/g, "")) || 0,
+    location: data.location || "India",
+    cv_path: data.resumePath || "",
+  }).catch(() => undefined);
+
   res.json({ data: await withSignedResume(data) });
 }));
 
@@ -252,6 +264,17 @@ router.post("/resume", wrap(async (req, res) => {
     .select("*")
     .single();
   if (error) throw error;
+
+  indexCandidateIntoAi({
+    id: data.id,
+    name: data.name,
+    resume_text: `${data.role || ""} ${data.about || ""} ${(data.skills || []).join(" ")} ${data.resumeName || ""}`,
+    skills: Array.isArray(data.skills) ? data.skills : [],
+    years_experience: Number(String(data.experience || "").replace(/\D/g, "")) || 0,
+    location: data.location || "India",
+    cv_path: data.resumePath || "",
+  }).catch(() => undefined);
+
   res.json({ data: await withSignedResume(data) });
 }));
 
