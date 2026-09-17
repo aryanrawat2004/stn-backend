@@ -25,6 +25,7 @@ import meRouter from "./routes/me";
 import pricingRouter from "./routes/pricing";
 import paymentsRouter from "./routes/payments";
 import cvUsageRouter from "./routes/cvUsage";
+import { couponsAdminRouter, couponsPublicRouter } from "./routes/coupons";
 import { resourcesAdminRouter, resourcesPublicRouter } from "./routes/resources";
 import { requireWriteRoles } from "./middleware/rbac";
 
@@ -66,6 +67,7 @@ app.use("/api/auth/linkedin", linkedinAuthRouter);
 app.use("/api/resources", resourcesPublicRouter);
 app.use("/api/pricing", pricingRouter);
 app.use("/api/payments", paymentsRouter);
+app.use("/api/coupons", couponsPublicRouter);
 app.use("/api/cv-usage", cvUsageRouter);
 app.use(
   "/api/passport-verification",
@@ -78,6 +80,7 @@ app.use("/api/admin/dashboard", dashboardRouter);
 app.use("/api/admin/analytics", analyticsRouter);
 app.use("/api/admin/jobs", jobsRouter);
 app.use("/api/admin/resources", adminWriteGuard, resourcesAdminRouter);
+app.use("/api/admin/coupons", adminWriteGuard, couponsAdminRouter);
 app.use("/api/admin/candidates", adminWriteGuard, candidatesRouter);
 app.use("/api/admin/job-seekers", adminWriteGuard, candidatesRouter);
 app.use("/api/admin/employers", adminWriteGuard, employersRouter);
@@ -106,15 +109,10 @@ app.get("/health/db", async (_req, res) => {
 
 app.get("/health/schema", async (_req, res) => {
   if (!supabase) {
-    return res.status(503).json({
-      status: "error",
-      database: databaseMode,
-      error: "Supabase client is not configured",
-    });
+    return res.status(503).json({ status: "error", database: databaseMode, error: "Supabase client is not configured" });
   }
 
   const db = supabase!;
-
   const requiredTables: Record<string, string> = {
     sn_jobs: 'id,role,company,location,type,status,createdAt,updatedAt',
     sn_candidates: 'id,name,email,phone,role,location,accountStatus,profileCompletion,resumeStrength,talentPassportScore,currentSalary,expectedSalary,noticePeriod,about,resumeUrl,resumeName,firebaseUid,createdAt,updatedAt',
@@ -128,16 +126,13 @@ app.get("/health/schema", async (_req, res) => {
     settings: 'id,siteName,contactEmail,emailAlerts,autoApproveVerified,weeklyDigest,createdAt,updatedAt',
     sn_resources: 'id,slug,type,title,excerpt,content,category,read_time,cover_image_url,resource_url,author_name,status,featured,published_at,created_at,updated_at',
     site_visits: 'id,visitor_id,session_id,user_id,path,started_at,last_seen,active_seconds,device,referrer',
+    sn_coupons: 'id,code,discount_type,discount_value,applicable_plans,min_order_amount,max_uses,used_count,active,created_at,updated_at',
   };
 
   const checks = await Promise.all(
     Object.entries(requiredTables).map(async ([table, columns]) => {
       const { error } = await db.from(table).select(columns).limit(1);
-      return {
-        table,
-        ok: !error,
-        error: error ? { code: error.code, message: error.message, hint: error.hint } : null,
-      };
+      return { table, ok: !error, error: error ? { code: error.code, message: error.message, hint: error.hint } : null };
     }),
   );
 
@@ -146,34 +141,19 @@ app.get("/health/schema", async (_req, res) => {
   const resumesBucket = buckets?.find((bucket) => bucket.id === "candidate-resumes");
   const storage = {
     ok: !bucketError && Boolean(resourcesBucket) && Boolean(resumesBucket),
-    resourcesBucket: resourcesBucket
-      ? { id: resourcesBucket.id, name: resourcesBucket.name, public: resourcesBucket.public }
-      : null,
-    resumesBucket: resumesBucket
-      ? { id: resumesBucket.id, name: resumesBucket.name, public: resumesBucket.public }
-      : null,
-    error: bucketError
-      ? bucketError.message
-      : !resourcesBucket
-        ? "resources bucket is missing"
-        : !resumesBucket
-          ? "candidate-resumes bucket is missing"
-          : null,
+    resourcesBucket: resourcesBucket ? { id: resourcesBucket.id, name: resourcesBucket.name, public: resourcesBucket.public } : null,
+    resumesBucket: resumesBucket ? { id: resumesBucket.id, name: resumesBucket.name, public: resumesBucket.public } : null,
+    error: bucketError ? bucketError.message : !resourcesBucket ? "resources bucket is missing" : !resumesBucket ? "candidate-resumes bucket is missing" : null,
   };
 
   const failedTables = checks.filter((check) => !check.ok);
   const ok = failedTables.length === 0 && storage.ok;
-
   return res.status(ok ? 200 : 500).json({
     status: ok ? "ok" : "error",
     database: databaseMode,
     tables: checks,
     storage,
-    summary: {
-      checkedTables: checks.length,
-      passedTables: checks.length - failedTables.length,
-      failedTables: failedTables.map((check) => check.table),
-    },
+    summary: { checkedTables: checks.length, passedTables: checks.length - failedTables.length, failedTables: failedTables.map((check) => check.table) },
   });
 });
 
@@ -198,6 +178,7 @@ app.listen(PORT, () => {
   console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
   console.log(`💳 Pricing API: http://localhost:${PORT}/api/pricing`);
   console.log(`💳 Razorpay API: http://localhost:${PORT}/api/payments`);
+  console.log(`🎟️ Coupon API: http://localhost:${PORT}/api/coupons`);
   console.log(`📊 CV usage API: http://localhost:${PORT}/api/cv-usage`);
   console.log(`🪪 Passport Verification API: http://localhost:${PORT}/api/passport-verification`);
   console.log(`👤 Candidate self API: http://localhost:${PORT}/api/me/candidate`);
