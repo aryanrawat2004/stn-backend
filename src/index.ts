@@ -24,6 +24,7 @@ import linkedinAuthRouter from "./routes/linkedin-auth";
 import meRouter from "./routes/me";
 import pricingRouter from "./routes/pricing";
 import paymentsRouter from "./routes/payments";
+import cvUsageRouter from "./routes/cvUsage";
 import { resourcesAdminRouter, resourcesPublicRouter } from "./routes/resources";
 import { requireWriteRoles } from "./middleware/rbac";
 
@@ -65,6 +66,7 @@ app.use("/api/auth/linkedin", linkedinAuthRouter);
 app.use("/api/resources", resourcesPublicRouter);
 app.use("/api/pricing", pricingRouter);
 app.use("/api/payments", paymentsRouter);
+app.use("/api/cv-usage", cvUsageRouter);
 app.use(
   "/api/passport-verification",
   passportVerificationRoutes,
@@ -196,6 +198,7 @@ app.listen(PORT, () => {
   console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
   console.log(`💳 Pricing API: http://localhost:${PORT}/api/pricing`);
   console.log(`💳 Razorpay API: http://localhost:${PORT}/api/payments`);
+  console.log(`📊 CV usage API: http://localhost:${PORT}/api/cv-usage`);
   console.log(`🪪 Passport Verification API: http://localhost:${PORT}/api/passport-verification`);
   console.log(`👤 Candidate self API: http://localhost:${PORT}/api/me/candidate`);
   console.log(`💼 Public jobs API: http://localhost:${PORT}/api/jobs`);
