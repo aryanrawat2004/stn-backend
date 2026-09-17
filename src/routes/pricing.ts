@@ -20,28 +20,24 @@ export type PricingPlan = {
 
 const plans: PricingPlan[] = [
   {
-  id: "free",
-  name: "Free Job Listing",
-  tagline: "Launch Offer for Employers",
-
-  priceLabel: "₹0",
-  billingLabel: "Launch Offer",
-
-  jobAllowance: "2 FREE job posts",
-  jobLiveDays: 5,
-
-  features: [
-    "2 FREE job posts",
-    "Each job stays live for 5 days",
-    "10 FREE resume accesses",
-    "Company profile",
-    "Complimentary launch offer",
-    "After 10 resumes: ₹299 per resume"
-  ],
-
-  ctaLabel: "Avail Complimentary Offer",
-  ctaHref: "/signup/Employer?plan=free",
-},
+    id: "free",
+    name: "Free Job Listing",
+    tagline: "Launch Offer for Employers",
+    priceLabel: "₹0",
+    billingLabel: "Launch Offer",
+    jobAllowance: "2 FREE job posts",
+    jobLiveDays: 5,
+    features: [
+      "2 FREE job posts",
+      "Each job stays live for 5 days",
+      "10 FREE resume accesses",
+      "Company profile",
+      "Complimentary launch offer",
+      "After 10 resumes: ₹299 per resume"
+    ],
+    ctaLabel: "Avail Complimentary Offer",
+    ctaHref: "/signup/Employer?plan=free",
+  },
   {
     id: "single-job",
     name: "Single Job",
@@ -52,12 +48,12 @@ const plans: PricingPlan[] = [
     jobLiveDays: 30,
     features: [
       "1 additional job post",
-      "Every job -stays live for 30 days",
+      "Every job stays live for 30 days",
       "Applicants dashboard",
       "Employer dashboard",
     ],
     ctaLabel: "Post One Job",
-    ctaHref: "/signup/Employer?plan=single-job",
+    ctaHref: "/checkout?plan=single-job",
   },
   {
     id: "starter",
@@ -75,9 +71,8 @@ const plans: PricingPlan[] = [
     ],
     recommended: true,
     ctaLabel: "Choose Starter",
-    ctaHref: "/signup/Employer?plan=starter",
+    ctaHref: "/checkout?plan=starter",
   },
-
   {
     id: "growth",
     name: "Growth",
@@ -94,19 +89,16 @@ const plans: PricingPlan[] = [
     ],
     recommended: false,
     ctaLabel: "Choose Growth",
-    ctaHref: "/signup/Employer?plan=growth",
+    ctaHref: "/checkout?plan=growth",
   },
   {
     id: "pro",
     name: "Pro",
     tagline: "For advanced talent sourcing",
-
     priceLabel: "₹9,999",
     billingLabel: "/ 3 months",
-
     jobAllowance: "7 job postings",
     jobLiveDays: 30,
-
     features: [
       "7 job postings",
       "Every job stays live for 30 days",
@@ -115,25 +107,18 @@ const plans: PricingPlan[] = [
       "250 top CVs across 7 job postings",
       "10 Talent Passports"
     ],
-
     bestseller: true,
-
-     
-
     ctaLabel: "Choose Pro",
-    ctaHref: "/signup/Employer?plan=pro",
+    ctaHref: "/checkout?plan=pro",
   },
   {
     id: "pro-plus",
     name: "Pro Plus",
     tagline: "For high-volume talent sourcing",
-
     priceLabel: "₹29,999",
     billingLabel: "/ 6 months",
-
     jobAllowance: "10 job postings",
     jobLiveDays: 30,
-
     features: [
       "10 job postings",
       "Every job stays live for 30 days",
@@ -144,30 +129,23 @@ const plans: PricingPlan[] = [
       "Employer dashboard",
       "50 Talent Passports"
     ],
-
-     
-
     ctaLabel: "Choose Pro Plus",
-    ctaHref: "/signup/Employer?plan=pro-plus",
+    ctaHref: "/checkout?plan=pro-plus",
   },
   {
     id: "enterprise",
     name: "Enterprise",
     tagline: "For high-volume recruitment",
-
     priceLabel: "Custom",
     billingLabel: "",
-
     jobAllowance: "Bulk hiring",
     jobLiveDays: 30,
-
     features: [
       "Bulk hiring",
       "Every job stays live for 30 days",
       "Multiple Employer accounts",
       "Dedicated hiring support"
     ],
-
     ctaLabel: "Speak To Our Customer Care Executive",
     ctaHref: "https://wa.me/919983807331",
   },
@@ -180,7 +158,7 @@ router.get("/", (_req, res) => {
       currency: "INR",
       country: "IN",
       jobLiveDays: 30,
-      updatedAt: "2026-09-16",
+      updatedAt: "2026-09-17",
     },
   });
 });
