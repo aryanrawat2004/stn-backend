@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { supabase } from "../db";
 import {
   listSharePointTalentFolders,
   loadSharePointTalent,
@@ -15,6 +16,56 @@ type SortMode = "match" | "experience" | "name";
 
 function normalise(value: unknown) {
   return String(value || "").trim().toLowerCase();
+}
+
+async function resolveCandidateResumeUrl(value: unknown) {
+  const raw = String(value || "");
+  const prefix = "storage://candidate-resumes/";
+  if (!raw.startsWith(prefix) || !supabase) return raw;
+
+  const storagePath = raw.slice(prefix.length);
+  const { data, error } = await supabase.storage
+    .from("candidate-resumes")
+    .createSignedUrl(storagePath, 60 * 60);
+
+  if (error) {
+    console.error("Could not sign candidate resume URL:", error.message);
+    return "";
+  }
+
+  return data.signedUrl;
+}
+
+async function loadSolarNaukriCandidates(): Promise<SharePointTalentItem[]> {
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("sn_candidates")
+    .select("*")
+    .order("createdAt", { ascending: false });
+
+  if (error) {
+    console.error("Failed to load SolarNaukri candidate records:", error.message);
+    return [];
+  }
+
+  const rows = (data || []).filter((row: any) => String(row.accountStatus || "Active").toLowerCase() !== "suspended");
+
+  return Promise.all(
+    rows.map(async (row: any) => ({
+      id: `sn-${row.id}`,
+      name: String(row.name || "Solar Candidate"),
+      role: String(row.role || "Solar Candidate"),
+      domain: "Solar / Renewable Energy",
+      location: String(row.location || "India"),
+      experience: String(row.experience || "Not specified"),
+      skills: Array.isArray(row.skills) ? row.skills.map(String) : [],
+      resumeUrl: await resolveCandidateResumeUrl(row.resumeUrl),
+      fileName: String(row.resumeName || "SolarNaukri candidate resume"),
+      folderName: "SolarNaukri Signups",
+      source: "sharepoint" as const,
+    })),
+  );
 }
 
 function extractYears(value?: string | null) {
@@ -189,7 +240,7 @@ router.get("/folders", async (req, res) => {
   }
 });
 
-router.get("/sharepoint", async (req, res, next) => {
+router.get("/sharepoint", async (req, res) => {
   try {
     const search = normalise(req.query.search);
     const jobRole = String(req.query.jobRole || "").trim();
@@ -203,9 +254,11 @@ router.get("/sharepoint", async (req, res, next) => {
     const limit = top ? 10 : Math.max(0, Math.min(1000, requestedLimit));
     const force = String(req.query.refresh || "") === "1";
 
-    const records = folder
+    const sharePointRecords = folder
       ? await loadSharePointTalentFolder(folder, force)
       : await loadSharePointTalent(force);
+    const solarNaukriRecords = await loadSolarNaukriCandidates();
+    const records = [...solarNaukriRecords, ...sharePointRecords];
 
     const ranked = records
       .map((item) => {
@@ -291,16 +344,16 @@ router.get("/sharepoint", async (req, res, next) => {
         locations,
         selectedFolder: folder || null,
         filters: { search, jobRole, experience, workType, location, sort, limit, top },
-        source: "sharepoint",
+        source: "sharepoint+solarnaukri",
       },
     });
   } catch (error: any) {
-    console.error("Failed to load SharePoint talent:", error);
+    console.error("Failed to load talent records:", error);
     res.status(502).json({
-      error: error?.message || "Failed to load SharePoint talent records",
+      error: error?.message || "Failed to load talent records",
       details: error?.message,
       data: [],
-      meta: { total: 0, allTotal: 0, folders: [], locations: [], source: "sharepoint" },
+      meta: { total: 0, allTotal: 0, folders: [], locations: [], source: "sharepoint+solarnaukri" },
     });
   }
 });
