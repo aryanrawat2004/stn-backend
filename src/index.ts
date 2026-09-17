@@ -10,6 +10,7 @@ import passportTalentRouter from "./routes/passportTalent";
 
 import employersRouter from "./routes/employers";
 import candidatesRouter from "./routes/candidates";
+import candidateSignupRouter from "./routes/candidateSignup";
 import jobsRouter from "./routes/jobs";
 import activitiesRouter from "./routes/activities";
 import companiesRouter from "./routes/companies";
@@ -55,6 +56,7 @@ app.use("/api/pricing", pricingRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/coupons", couponsPublicRouter);
 app.use("/api/cv-usage", cvUsageRouter);
+app.use("/api/candidates", candidateSignupRouter);
 app.use("/api/passport-verification", passportVerificationRoutes);
 app.use("/api/passport-talent", passportTalentRouter);
 app.use("/api/jobs", jobsRouter);
@@ -145,6 +147,7 @@ app.listen(PORT, () => {
   console.log(`🧩 Schema diagnostics: http://localhost:${PORT}/health/schema`);
   console.log(`🔗 LinkedIn auth: http://localhost:${PORT}/api/auth/linkedin/start?role=candidate`);
   console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
+  console.log(`👤 Candidate signup API: http://localhost:${PORT}/api/candidates/signup`);
   console.log(`💳 Pricing API: http://localhost:${PORT}/api/pricing`);
   console.log(`💳 Razorpay API: http://localhost:${PORT}/api/payments`);
   console.log(`🎟️ Coupon API: http://localhost:${PORT}/api/coupons`);
