@@ -31,6 +31,11 @@ alter table if exists public.candidate_verifications
   add column if not exists created_at timestamptz default now(),
   add column if not exists updated_at timestamptz default now();
 
+-- Older installs created candidate_id as NOT NULL, while the current API allows
+-- verification drafts to be created before a candidate record is linked.
+alter table if exists public.candidate_verifications
+  alter column candidate_id drop not null;
+
 create table if not exists public.candidate_verification_documents (
   id uuid primary key,
   verification_id uuid not null references public.candidate_verifications(id) on delete cascade,
