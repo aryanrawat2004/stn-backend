@@ -23,6 +23,7 @@ import talentRouter from "./routes/talent";
 import linkedinAuthRouter from "./routes/linkedin-auth";
 import meRouter from "./routes/me";
 import pricingRouter from "./routes/pricing";
+import paymentsRouter from "./routes/payments";
 import { resourcesAdminRouter, resourcesPublicRouter } from "./routes/resources";
 import { requireWriteRoles } from "./middleware/rbac";
 
@@ -41,7 +42,6 @@ app.use(
   "/uploads",
   express.static(path.join(process.cwd(), "uploads")),
 );
-
 
 app.get("/api-docs.json", (_req, res) => {
   res.json(swaggerSpec);
@@ -64,6 +64,7 @@ app.use(
 app.use("/api/auth/linkedin", linkedinAuthRouter);
 app.use("/api/resources", resourcesPublicRouter);
 app.use("/api/pricing", pricingRouter);
+app.use("/api/payments", paymentsRouter);
 app.use(
   "/api/passport-verification",
   passportVerificationRoutes,
@@ -110,7 +111,6 @@ app.get("/health/schema", async (_req, res) => {
     });
   }
 
-  // Capture a guaranteed non-null client for nested async callbacks.
   const db = supabase!;
 
   const requiredTables: Record<string, string> = {
@@ -176,9 +176,6 @@ app.get("/health/schema", async (_req, res) => {
 });
 
 app.use((_req, res) => { res.status(404).json({ error: "Route not found" }); });
-console.log(
-  `🪪 Passport Verification API: http://localhost:${PORT}/api/passport-verification`
-);
 
 app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("Unhandled API error:", error);
@@ -198,6 +195,8 @@ app.listen(PORT, () => {
   console.log(`🔗 LinkedIn auth: http://localhost:${PORT}/api/auth/linkedin/start?role=candidate`);
   console.log(`📚 Resources API: http://localhost:${PORT}/api/resources`);
   console.log(`💳 Pricing API: http://localhost:${PORT}/api/pricing`);
+  console.log(`💳 Razorpay API: http://localhost:${PORT}/api/payments`);
+  console.log(`🪪 Passport Verification API: http://localhost:${PORT}/api/passport-verification`);
   console.log(`👤 Candidate self API: http://localhost:${PORT}/api/me/candidate`);
   console.log(`💼 Public jobs API: http://localhost:${PORT}/api/jobs`);
   console.log(`📁 SharePoint talent: http://localhost:${PORT}/api/talent/sharepoint`);
