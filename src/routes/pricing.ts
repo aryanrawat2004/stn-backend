@@ -18,6 +18,9 @@ export type PricingPlan = {
   ctaHref: string;
 };
 
+const CV_USAGE_DISCLAIMER =
+  "CV usage rule: A single CV view/download counts as 1 CV access. When multiple CVs are downloaded/exported through Excel, each CV counts as 2 CV accesses.";
+
 const plans: PricingPlan[] = [
   {
     id: "free",
@@ -35,6 +38,7 @@ const plans: PricingPlan[] = [
       "Complimentary launch offer",
       "After 10 resumes: ₹299 per resume"
     ],
+    note: CV_USAGE_DISCLAIMER,
     ctaLabel: "Avail Complimentary Offer",
     ctaHref: "/signup/Employer?plan=free",
   },
@@ -52,6 +56,7 @@ const plans: PricingPlan[] = [
       "Applicants dashboard",
       "Employer dashboard",
     ],
+    note: CV_USAGE_DISCLAIMER,
     ctaLabel: "Post One Job",
     ctaHref: "/checkout?plan=single-job",
   },
@@ -69,6 +74,7 @@ const plans: PricingPlan[] = [
       "Company profile",
       "Applicants & Employer dashboard",
     ],
+    note: CV_USAGE_DISCLAIMER,
     recommended: true,
     ctaLabel: "Choose Starter",
     ctaHref: "/checkout?plan=starter",
@@ -87,6 +93,7 @@ const plans: PricingPlan[] = [
       "Company branding",
       "Applicants & Employer dashboard",
     ],
+    note: CV_USAGE_DISCLAIMER,
     recommended: false,
     ctaLabel: "Choose Growth",
     ctaHref: "/checkout?plan=growth",
@@ -107,6 +114,7 @@ const plans: PricingPlan[] = [
       "250 top CVs across 7 job postings",
       "10 Talent Passports"
     ],
+    note: CV_USAGE_DISCLAIMER,
     bestseller: true,
     ctaLabel: "Choose Pro",
     ctaHref: "/checkout?plan=pro",
@@ -129,6 +137,7 @@ const plans: PricingPlan[] = [
       "Employer dashboard",
       "50 Talent Passports"
     ],
+    note: CV_USAGE_DISCLAIMER,
     ctaLabel: "Choose Pro Plus",
     ctaHref: "/checkout?plan=pro-plus",
   },
@@ -146,6 +155,7 @@ const plans: PricingPlan[] = [
       "Multiple Employer accounts",
       "Dedicated hiring support"
     ],
+    note: CV_USAGE_DISCLAIMER,
     ctaLabel: "Speak To Our Customer Care Executive",
     ctaHref: "https://wa.me/919983807331",
   },
@@ -158,6 +168,10 @@ router.get("/", (_req, res) => {
       currency: "INR",
       country: "IN",
       jobLiveDays: 30,
+      cvAccessRules: {
+        singleCvAccessUnits: 1,
+        excelBulkCvAccessUnitsPerCv: 2,
+      },
       updatedAt: "2026-09-17",
     },
   });
