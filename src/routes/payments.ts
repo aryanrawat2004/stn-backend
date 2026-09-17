@@ -6,6 +6,9 @@ import { redeemCoupon, validateCouponForOrder } from "./coupons";
 
 const router = Router();
 
+const GST_RATE = 0.18;
+const GST_PERCENT = 18;
+
 const PAID_PLANS = {
   "single-job": { amount: 49900, currency: "INR", name: "Single Job" },
   starter: { amount: 149900, currency: "INR", name: "Starter" },
@@ -35,12 +38,18 @@ function getRazorpayClient() {
 
 router.post("/create-order", async (req, res) => {
   try {
-    const planId = String(req.body?.planId || "") as PaidPlanId;
-    const plan = PAID_PLANS[planId];
-    if (!plan) return res.status(400).json({ error: "Invalid paid plan" });
+    const rawPlanId = String(req.body?.planId || "");
+    if (!(rawPlanId in PAID_PLANS)) {
+      return res.status(400).json({ error: "Invalid paid plan" });
+    }
 
+    const planId = rawPlanId as PaidPlanId;
+    const plan = PAID_PLANS[planId];
     const baseAmount: number = Number(plan.amount);
-    if (baseAmount < 100) return res.status(400).json({ error: "Amount must be at least 100 paise" });
+
+    if (baseAmount < 100) {
+      return res.status(400).json({ error: "Amount must be at least 100 paise" });
+    }
 
     const razorpayConfig = getRazorpayClient();
     if (!razorpayConfig) {
@@ -54,16 +63,25 @@ router.post("/create-order", async (req, res) => {
     }
 
     const couponCode = String(req.body?.couponCode || "").trim().toUpperCase();
-    let amount: number = baseAmount;
     let discountAmount = 0;
     let appliedCoupon = "";
 
     if (couponCode) {
       const couponResult = await validateCouponForOrder(couponCode, planId, baseAmount);
-      if (!couponResult.valid) return res.status(400).json({ error: couponResult.error });
-      amount = Number(couponResult.finalAmount);
-      discountAmount = Number(couponResult.discountAmount);
+      if (!couponResult.valid) {
+        return res.status(400).json({ error: couponResult.error });
+      }
+
+      discountAmount = Number(couponResult.discountAmount || 0);
       appliedCoupon = couponResult.code;
+    }
+
+    const taxableAmount = Math.max(0, baseAmount - discountAmount);
+    const gstAmount = Math.round(taxableAmount * GST_RATE);
+    const amount = taxableAmount + gstAmount;
+
+    if (amount < 100) {
+      return res.status(400).json({ error: "Final payable amount must be at least 100 paise" });
     }
 
     const verificationId = req.body?.verificationId ? String(req.body.verificationId) : "";
@@ -80,6 +98,10 @@ router.post("/create-order", async (req, res) => {
         couponCode: appliedCoupon,
         originalAmount: String(baseAmount),
         discountAmount: String(discountAmount),
+        taxableAmount: String(taxableAmount),
+        gstRate: String(GST_PERCENT),
+        gstAmount: String(gstAmount),
+        finalAmount: String(amount),
         source: planId === "talent-passport" ? "solarnaukri-talent-passport" : "solarnaukri-pricing",
       },
     });
@@ -89,6 +111,9 @@ router.post("/create-order", async (req, res) => {
       amount: order.amount,
       original_amount: baseAmount,
       discount_amount: discountAmount,
+      taxable_amount: taxableAmount,
+      gst_rate: GST_PERCENT,
+      gst_amount: gstAmount,
       coupon_code: appliedCoupon || null,
       currency: order.currency,
       plan_id: planId,
@@ -98,7 +123,9 @@ router.post("/create-order", async (req, res) => {
   } catch (error: any) {
     console.error("Razorpay create-order error:", error);
     const statusCode = Number(error?.statusCode || error?.status || 500);
-    if (statusCode === 401) return res.status(401).json({ error: "Razorpay authentication failed" });
+    if (statusCode === 401) {
+      return res.status(401).json({ error: "Razorpay authentication failed" });
+    }
     return res.status(500).json({
       error: "Could not create Razorpay order",
       details: process.env.NODE_ENV !== "production" ? error?.message || String(error) : undefined,
@@ -122,7 +149,9 @@ router.post("/verify-payment", async (req, res) => {
 
     const razorpayConfig = getRazorpayClient();
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    if (!razorpayConfig || !keySecret) return res.status(500).json({ error: "Razorpay is not configured on the server" });
+    if (!razorpayConfig || !keySecret) {
+      return res.status(500).json({ error: "Razorpay is not configured on the server" });
+    }
 
     const expectedSignature = crypto
       .createHmac("sha256", keySecret)
@@ -143,6 +172,9 @@ router.post("/verify-payment", async (req, res) => {
     const verifiedVerificationId = String(notes.verificationId || verificationId || "");
     const couponCode = String(notes.couponCode || "");
     const discountAmount = Number(notes.discountAmount || 0);
+    const gstAmount = Number(notes.gstAmount || 0);
+    const gstRate = Number(notes.gstRate || GST_PERCENT);
+    const taxableAmount = Number(notes.taxableAmount || 0);
 
     if (verifiedPlanId === "talent-passport" && verifiedVerificationId) {
       if (!supabase) return res.status(503).json({ error: "Database is not configured" });
@@ -179,6 +211,11 @@ router.post("/verify-payment", async (req, res) => {
       order_id: razorpay_order_id,
       coupon_code: couponCode || null,
       discount_amount: discountAmount,
+      taxable_amount: taxableAmount,
+      gst_rate: gstRate,
+      gst_amount: gstAmount,
+      amount: Number(order.amount),
+      currency: order.currency,
     });
   } catch (error: any) {
     console.error("Razorpay verify-payment error:", error);
