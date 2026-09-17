@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import Razorpay from "razorpay";
 import { supabase } from "../db";
+import { redeemCoupon, validateCouponForOrder } from "./coupons";
 
 const router = Router();
 
@@ -50,17 +51,33 @@ router.post("/create-order", async (req, res) => {
       });
     }
 
+    const couponCode = String(req.body?.couponCode || "").trim().toUpperCase();
+    let amount = plan.amount;
+    let discountAmount = 0;
+    let appliedCoupon = "";
+
+    if (couponCode) {
+      const couponResult = await validateCouponForOrder(couponCode, planId, plan.amount);
+      if (!couponResult.valid) return res.status(400).json({ error: couponResult.error });
+      amount = couponResult.finalAmount;
+      discountAmount = couponResult.discountAmount;
+      appliedCoupon = couponResult.code;
+    }
+
     const verificationId = req.body?.verificationId ? String(req.body.verificationId) : "";
     const receipt = `sn_${planId}_${Date.now()}`.slice(0, 40);
 
     const order = await razorpayConfig.client.orders.create({
-      amount: plan.amount,
+      amount,
       currency: plan.currency,
       receipt,
       notes: {
         planId,
         planName: plan.name,
         verificationId,
+        couponCode: appliedCoupon,
+        originalAmount: String(plan.amount),
+        discountAmount: String(discountAmount),
         source: planId === "talent-passport" ? "solarnaukri-talent-passport" : "solarnaukri-pricing",
       },
     });
@@ -68,6 +85,9 @@ router.post("/create-order", async (req, res) => {
     return res.status(201).json({
       order_id: order.id,
       amount: order.amount,
+      original_amount: plan.amount,
+      discount_amount: discountAmount,
+      coupon_code: appliedCoupon || null,
       currency: order.currency,
       plan_id: planId,
       plan_name: plan.name,
@@ -98,8 +118,9 @@ router.post("/verify-payment", async (req, res) => {
       return res.status(400).json({ error: "Missing Razorpay payment verification fields" });
     }
 
+    const razorpayConfig = getRazorpayClient();
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    if (!keySecret) return res.status(500).json({ error: "Razorpay is not configured on the server" });
+    if (!razorpayConfig || !keySecret) return res.status(500).json({ error: "Razorpay is not configured on the server" });
 
     const expectedSignature = crypto
       .createHmac("sha256", keySecret)
@@ -114,7 +135,14 @@ router.post("/verify-payment", async (req, res) => {
       return res.status(400).json({ success: false, error: "Payment signature verification failed" });
     }
 
-    if (planId === "talent-passport" && verificationId) {
+    const order = await razorpayConfig.client.orders.fetch(String(razorpay_order_id));
+    const notes = (order.notes || {}) as Record<string, string>;
+    const verifiedPlanId = String(notes.planId || planId || "");
+    const verifiedVerificationId = String(notes.verificationId || verificationId || "");
+    const couponCode = String(notes.couponCode || "");
+    const discountAmount = Number(notes.discountAmount || 0);
+
+    if (verifiedPlanId === "talent-passport" && verifiedVerificationId) {
       if (!supabase) return res.status(503).json({ error: "Database is not configured" });
       const { error: paymentUpdateError } = await supabase
         .from("candidate_verifications")
@@ -124,7 +152,7 @@ router.post("/verify-payment", async (req, res) => {
           payment_order_id: String(razorpay_order_id),
           updated_at: new Date().toISOString(),
         })
-        .eq("id", String(verificationId));
+        .eq("id", verifiedVerificationId);
 
       if (paymentUpdateError) {
         console.error("Talent Passport payment update failed:", paymentUpdateError);
@@ -132,11 +160,23 @@ router.post("/verify-payment", async (req, res) => {
       }
     }
 
+    if (couponCode) {
+      await redeemCoupon({
+        couponCode,
+        paymentId: String(razorpay_payment_id),
+        orderId: String(razorpay_order_id),
+        planId: verifiedPlanId,
+        discountAmount,
+      });
+    }
+
     return res.json({
       success: true,
       message: "Payment verified successfully",
       payment_id: razorpay_payment_id,
       order_id: razorpay_order_id,
+      coupon_code: couponCode || null,
+      discount_amount: discountAmount,
     });
   } catch (error: any) {
     console.error("Razorpay verify-payment error:", error);
