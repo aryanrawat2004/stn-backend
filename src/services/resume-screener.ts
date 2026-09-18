@@ -1,4 +1,4 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
 dotenv.config();
 
 export interface AiCandidate {
@@ -88,6 +88,19 @@ export function isSolarCandidate(candidate: {
   return SOLAR_KEYWORDS.some((kw) => haystack.includes(kw));
 }
 
+const AI_CACHE_TTL_MS = 5 * 60 * 1000;
+const aiCandidateCache = new Map<string, { data: { candidates: AiCandidate[]; total: number }; expiresAt: number }>();
+
+// Background warm-up ping so Render wakes up immediately upon backend start
+setTimeout(() => {
+  const config = getResumeScreenerConfig();
+  if (config.enabled) {
+    fetch(`${config.url}/health`, { signal: AbortSignal.timeout(5_000) })
+      .then(() => console.log("[ResumeScreener] Background wake-up ping succeeded"))
+      .catch(() => undefined);
+  }
+}, 1000);
+
 export async function fetchAiCandidates(options: {
   searchTerm?: string;
   minExp?: number;
@@ -98,6 +111,12 @@ export async function fetchAiCandidates(options: {
   const config = getResumeScreenerConfig();
   if (!config.enabled) {
     return { candidates: [], total: 0 };
+  }
+
+  const cacheKey = JSON.stringify(options);
+  const cached = aiCandidateCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
   }
 
   const params = new URLSearchParams();
@@ -113,12 +132,12 @@ export async function fetchAiCandidates(options: {
         "X-API-Key": config.apiKey,
         Accept: "application/json",
       },
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(30_000), // 30s to allow Render cold start
     });
 
     if (!response.ok) {
       console.warn(`[ResumeScreener] /api/v1/candidates returned HTTP ${response.status}`);
-      return { candidates: [], total: 0 };
+      return cached?.data || { candidates: [], total: 0 };
     }
 
     const json = (await response.json()) as { candidates?: AiCandidate[]; total?: number };
@@ -135,12 +154,22 @@ export async function fetchAiCandidates(options: {
       }),
     );
 
-    return {
+    const result = {
       candidates: solarOnly,
       total: solarOnly.length,
     };
+
+    aiCandidateCache.set(cacheKey, {
+      data: result,
+      expiresAt: Date.now() + AI_CACHE_TTL_MS,
+    });
+
+    return result;
   } catch (error: any) {
-    console.warn("[ResumeScreener] Failed to fetch candidates from AI microservice:", error.message);
+    if (cached) {
+      return cached.data;
+    }
+    console.warn("[ResumeScreener] Notice: AI microservice cold-start or busy, using local Solar talent pool.");
     return { candidates: [], total: 0 };
   }
 }
