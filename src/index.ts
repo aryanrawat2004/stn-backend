@@ -6,7 +6,7 @@ import cors from "cors";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 import passportVerificationRoutes from "./routes/passportVerification";
-import passportTalentRouter from "./routes/passportTalent";
+import passportTalentRouter from "./routes/passportTalent";\nimport aadhaarVerificationRouter from "./routes/aadhaarVerification";
 
 import employersRouter from "./routes/employers";
 import candidatesRouter from "./routes/candidates";
@@ -58,7 +58,7 @@ app.use("/api/coupons", couponsPublicRouter);
 app.use("/api/cv-usage", cvUsageRouter);
 app.use("/api/candidates", candidateSignupRouter);
 app.use("/api/passport-verification", passportVerificationRoutes);
-app.use("/api/passport-talent", passportTalentRouter);
+app.use("/api/passport-talent", passportTalentRouter);\napp.use("/api/aadhaar-verification", aadhaarVerificationRouter);
 app.use("/api/jobs", jobsRouter);
 app.use("/api/talent", talentRouter);
 app.use("/api/me", meRouter);
