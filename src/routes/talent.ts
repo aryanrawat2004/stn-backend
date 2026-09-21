@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { supabase } from "../db";
 import {
   listSharePointTalentFolders,
@@ -289,6 +289,37 @@ function roleMatchScore(item: UnifiedTalentItem, jobRole: string) {
   return { score: Math.min(100, score), reasons };
 }
 
+function skillsMatchScore(item: UnifiedTalentItem, requestedSkills: string) {
+  if (!requestedSkills.trim()) return { score: 0, matchedSkills: [] as string[], reasons: [] as string[] };
+
+  const parsed = requestedSkills
+    .split(/[,;\n/]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 1);
+
+  if (!parsed.length) return { score: 0, matchedSkills: [] as string[], reasons: [] as string[] };
+
+  const haystack = [
+    item.role,
+    item.name,
+    item.fileName,
+    item.resume_text || "",
+    ...item.skills,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const matched = parsed.filter((skill) => haystack.includes(skill));
+
+  if (!matched.length) return { score: 0, matchedSkills: [] as string[], reasons: [] as string[] };
+
+  const ratio = matched.length / parsed.length;
+  const score = Math.round(ratio * 25);
+  const reasons = [`Skills & tools matched (${matched.length}/${parsed.length}): ${matched.slice(0, 4).join(", ")}`];
+
+  return { score, matchedSkills: matched, reasons };
+}
+
 function experienceFitScore(item: UnifiedTalentItem, requested: ExperienceFilter) {
   if (requested === "all") return { score: 0, reason: "" };
   const bucket = experienceBucket(item);
@@ -373,6 +404,7 @@ router.get("/sharepoint", async (req, res) => {
   try {
     const search = normalise(req.query.search);
     const jobRole = String(req.query.jobRole || "").trim();
+    const skills = String(req.query.skills || "").trim();
     const folder = String(req.query.folder || "").trim();
     const experience = (normalise(req.query.experience) || "all") as ExperienceFilter;
     const workType = (normalise(req.query.workType) || "all") as WorkTypeFilter;
@@ -392,7 +424,7 @@ router.get("/sharepoint", async (req, res) => {
     const solarNaukriRecords = await loadSolarNaukriCandidates();
 
     // 3. AI Resume Screener candidates (filtered strictly for Solar domain)
-    const aiRecords = await loadAiResumes(search, experience);
+    const aiRecords = await loadAiResumes(search || jobRole || skills, experience);
 
     // Unified candidate pool with SolarNaukri signups prioritized
     const seenNames = new Set<string>();
@@ -436,26 +468,29 @@ router.get("/sharepoint", async (req, res) => {
           .toLowerCase();
 
         const roleMatch = roleMatchScore(item, jobRole);
+        const skillsFit = skillsMatchScore(item, skills);
         const expFit = experienceFitScore(item, experience);
         const workFit = workTypeFitScore(item, workType);
         const locationFit = locationFitScore(item, location);
         const keywordScore = scoreSearch(item, search);
         const reasons = [
           ...roleMatch.reasons,
+          ...skillsFit.reasons,
           expFit.reason,
           workFit.reason,
           locationFit.reason,
         ].filter(Boolean);
 
+        const hasCriteria = Boolean(jobRole || skills);
         const weightedScore = Math.min(
           100,
-          roleMatch.score + expFit.score + workFit.score + locationFit.score + Math.min(10, keywordScore),
+          roleMatch.score + skillsFit.score + expFit.score + workFit.score + locationFit.score + Math.min(10, keywordScore),
         );
 
         return {
           item,
-          score: jobRole ? weightedScore : keywordScore,
-          matchPercent: jobRole ? weightedScore : Math.min(100, keywordScore * 5),
+          score: hasCriteria ? weightedScore : keywordScore,
+          matchPercent: hasCriteria ? weightedScore : Math.min(100, keywordScore * 5),
           reasons,
           bucket: experienceBucket(item),
           inferredWorkType: inferWorkType(item),
@@ -468,7 +503,7 @@ router.get("/sharepoint", async (req, res) => {
         const matchesExperience = experience === "all" || bucket === experience;
         const matchesWorkType = workType === "all" || inferredWorkType === workType;
         const matchesLocation = location === "all" || haystack.includes(location);
-        const matchesRole = !jobRole || score > 0;
+        const matchesRole = (!jobRole && !skills) || score > 0;
         return matchesSearch && matchesExperience && matchesWorkType && matchesLocation && matchesRole;
       });
 
@@ -503,7 +538,7 @@ router.get("/sharepoint", async (req, res) => {
         folders,
         locations,
         selectedFolder: folder || null,
-        filters: { search, jobRole, experience, workType, location, sort, limit, top },
+        filters: { search, jobRole, skills, experience, workType, location, sort, limit, top },
         source: "resume_screener+sharepoint+solarnaukri",
       },
     });
