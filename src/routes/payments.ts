@@ -10,7 +10,6 @@ const GST_RATE = 0.18;
 const GST_PERCENT = 18;
 
 const PAID_PLANS = {
-  "razorpay-test": { amount: 300, currency: "INR", name: "Razorpay Test Payment", applyGst: false },
   "single-job": { amount: 49900, currency: "INR", name: "Single Job" },
   starter: { amount: 149900, currency: "INR", name: "Starter" },
   growth: { amount: 299900, currency: "INR", name: "Growth" },
@@ -78,8 +77,7 @@ router.post("/create-order", async (req, res) => {
     }
 
     const taxableAmount = Math.max(0, baseAmount - discountAmount);
-    const shouldApplyGst = !("applyGst" in plan) || plan.applyGst !== false;
-    const gstAmount = shouldApplyGst ? Math.round(taxableAmount * GST_RATE) : 0;
+    const gstAmount = Math.round(taxableAmount * GST_RATE);
     const amount = taxableAmount + gstAmount;
 
     if (amount < 100) {
@@ -101,7 +99,7 @@ router.post("/create-order", async (req, res) => {
         originalAmount: String(baseAmount),
         discountAmount: String(discountAmount),
         taxableAmount: String(taxableAmount),
-        gstRate: String(shouldApplyGst ? GST_PERCENT : 0),
+        gstRate: String(GST_PERCENT),
         gstAmount: String(gstAmount),
         finalAmount: String(amount),
         source: planId === "talent-passport" ? "solarnaukri-talent-passport" : "solarnaukri-pricing",
@@ -114,7 +112,7 @@ router.post("/create-order", async (req, res) => {
       original_amount: baseAmount,
       discount_amount: discountAmount,
       taxable_amount: taxableAmount,
-      gst_rate: shouldApplyGst ? GST_PERCENT : 0,
+      gst_rate: GST_PERCENT,
       gst_amount: gstAmount,
       coupon_code: appliedCoupon || null,
       currency: order.currency,
