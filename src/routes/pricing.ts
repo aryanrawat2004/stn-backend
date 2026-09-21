@@ -23,23 +23,6 @@ const CV_USAGE_DISCLAIMER =
 
 const plans: PricingPlan[] = [
   {
-    id: "razorpay-test",
-    name: "Razorpay Test",
-    tagline: "For live payment gateway testing",
-    priceLabel: "₹3",
-    billingLabel: "one-time",
-    jobAllowance: "Test transaction only",
-    jobLiveDays: 0,
-    features: [
-      "Live Razorpay payment test",
-      "Exact ₹3 payable amount",
-      "No job allowance or plan upgrade",
-      "Use this only for gateway verification"
-    ],
-    ctaLabel: "Pay ₹3 & Test",
-    ctaHref: "/checkout?plan=razorpay-test",
-  },
-  {
     id: "free",
     name: "Free Job Listing",
     tagline: "Launch Offer for Employers",
