@@ -591,4 +591,114 @@ router.get("/Employer/applications", wrap(async (req, res) => {
   });
 }));
 
+
+router.get("/Employer/company", wrap(async (req, res) => {
+  if (!requireDb(res)) return;
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  const employer = await ensureEmployer(auth);
+
+  let company: any = null;
+  const byEmail = await supabase!
+    .from("sn_companies")
+    .select("*")
+    .ilike("email", auth.email)
+    .limit(1)
+    .maybeSingle();
+
+  if (byEmail.error) throw byEmail.error;
+  company = byEmail.data || null;
+
+  if (!company && employer?.companyName) {
+    const byName = await supabase!
+      .from("sn_companies")
+      .select("*")
+      .eq("companyName", employer.companyName)
+      .limit(1)
+      .maybeSingle();
+    if (byName.error) throw byName.error;
+    company = byName.data || null;
+  }
+
+  return res.json({ data: company, employer: employer || null });
+}));
+
+router.put("/Employer/company", wrap(async (req, res) => {
+  if (!requireDb(res)) return;
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  const companyName = String(req.body?.companyName || "").trim();
+  const industry = String(req.body?.industry || "").trim();
+  const location = String(req.body?.location || "").trim();
+  const description = String(req.body?.description || "").trim();
+
+  if (!companyName || !industry || !location || !description) {
+    return res.status(400).json({ error: "Company name, industry, location and description are required" });
+  }
+
+  const existingEmployer = await ensureEmployer(auth);
+  const existingCompanyByEmail = await supabase!
+    .from("sn_companies")
+    .select("*")
+    .ilike("email", auth.email)
+    .limit(1)
+    .maybeSingle();
+  if (existingCompanyByEmail.error) throw existingCompanyByEmail.error;
+
+  const now = new Date().toISOString();
+  const companyId = String(existingCompanyByEmail.data?.id || `company-${auth.uid || auth.email}`);
+  const employerId = String(existingEmployer?.id || `employer-${auth.uid || auth.email}`);
+
+  const companyRecord = {
+    ...(existingCompanyByEmail.data || {}),
+    ...req.body,
+    id: companyId,
+    companyName,
+    industry,
+    location,
+    description,
+    email: auth.email,
+    contactPerson: String(req.body?.contactPerson || auth.name || auth.email.split("@")[0]).trim(),
+    verified: Boolean(existingCompanyByEmail.data?.verified || false),
+    verificationStatus: String(existingCompanyByEmail.data?.verificationStatus || "Pending"),
+    status: String(existingCompanyByEmail.data?.status || "Pending"),
+    accountStatus: String(existingCompanyByEmail.data?.accountStatus || "Active"),
+    updatedAt: now,
+    createdAt: existingCompanyByEmail.data?.createdAt || now,
+  };
+
+  const { data: company, error: companyError } = await supabase!
+    .from("sn_companies")
+    .upsert(companyRecord, { onConflict: "id" })
+    .select("*")
+    .single();
+  if (companyError) throw companyError;
+
+  const employerRecord = {
+    ...(existingEmployer || {}),
+    id: employerId,
+    companyName,
+    contactPerson: String(req.body?.contactPerson || existingEmployer?.contactPerson || auth.name || auth.email.split("@")[0]).trim(),
+    email: auth.email,
+    location,
+    jobsPosted: Number(req.body?.jobsPosted ?? existingEmployer?.jobsPosted ?? 0),
+    verified: Boolean(existingEmployer?.verified || false),
+    joinedDate: String(existingEmployer?.joinedDate || req.body?.joinedDate || new Date().toISOString().slice(0, 10)),
+    status: String(existingEmployer?.status || "Pending Verification"),
+    updatedAt: now,
+    createdAt: existingEmployer?.createdAt || now,
+  };
+
+  const { data: employer, error: employerError } = await supabase!
+    .from("sn_employers")
+    .upsert(employerRecord, { onConflict: "id" })
+    .select("*")
+    .single();
+  if (employerError) throw employerError;
+
+  return res.json({ data: company, employer });
+}));
+
 export default router;
