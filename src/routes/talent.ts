@@ -369,10 +369,6 @@ router.get("/status", (_req, res) => {
 
 router.get("/folders", async (req, res) => {
   try {
-    const verifiedOnly = String(req.query.verified || "") === "1";
-    const noticePeriod = normalise(req.query.noticePeriod) || "all";
-    const expectedSalary = normalise(req.query.expectedSalary) || "all";
-    const immediateJoinerOnly = String(req.query.immediateJoiner || "") === "1";
     const force = String(req.query.refresh || "") === "1";
     const folders = await listSharePointTalentFolders(force);
     res.json({ data: folders, meta: { total: folders.length, source: "sharepoint" } });
@@ -427,6 +423,10 @@ router.get("/sharepoint", async (req, res) => {
     const top = String(req.query.top || "") === "1";
     const requestedLimit = Number(req.query.limit || 0) || 0;
     const limit = top ? 10 : Math.max(0, Math.min(1000, requestedLimit));
+    const verifiedOnly = String(req.query.verified || "") === "1";
+    const noticePeriod = normalise(req.query.noticePeriod) || "all";
+    const expectedSalary = normalise(req.query.expectedSalary) || "all";
+    const immediateJoinerOnly = String(req.query.immediateJoiner || "") === "1";
     const force = String(req.query.refresh || "") === "1";
 
     // 1. SharePoint resumes (Solar folder)
