@@ -410,6 +410,34 @@ router.get("/pdf/:candidateId", async (req, res) => {
   }
 });
 
+router.post("/candidates/:candidateId/view", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const rawId = String(req.params.candidateId || "");
+    if (!rawId.startsWith("sn-")) return res.json({ tracked: false });
+
+    const candidateId = rawId.slice(3);
+    const { data: candidate, error: findError } = await supabase
+      .from("sn_candidates")
+      .select("id,profileViews")
+      .eq("id", candidateId)
+      .maybeSingle();
+    if (findError) return res.status(500).json({ error: findError.message });
+    if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+
+    const profileViews = Number(candidate.profileViews || 0) + 1;
+    const { error } = await supabase
+      .from("sn_candidates")
+      .update({ profileViews, updatedAt: new Date().toISOString() })
+      .eq("id", candidateId);
+    if (error) return res.status(500).json({ error: error.message });
+
+    return res.json({ tracked: true, profileViews });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || "Could not track candidate view" });
+  }
+});
+
 router.get("/sharepoint", async (req, res) => {
   try {
     const search = normalise(req.query.search);
