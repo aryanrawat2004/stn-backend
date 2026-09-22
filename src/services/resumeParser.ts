@@ -90,7 +90,25 @@ function unique<T>(values: T[]) {
 
 function findSkills(text: string) {
   const lower = text.toLowerCase();
-  return unique(SKILLS.filter((skill) => lower.includes(skill.toLowerCase()))).slice(0, 24);
+  const known = SKILLS.filter((skill) => lower.includes(skill.toLowerCase()));
+
+  const lines = linesOf(text);
+  const start = lines.findIndex((line) => /^(technical\s+skills|skills|core\s+skills|key\s+skills|tools|technologies)$/i.test(line));
+  const sectionSkills: string[] = [];
+  if (start >= 0) {
+    for (const line of lines.slice(start + 1, start + 8)) {
+      if (/^(experience|work experience|education|projects?|certifications?|summary|profile|achievements?|languages?)$/i.test(line)) break;
+      const parts = line
+        .split(/[,|;/•]+/)
+        .map((part) => part.trim())
+        .filter((part) => part.length >= 2 && part.length <= 40 && !/^(and|or)$/i.test(part));
+      sectionSkills.push(...parts);
+    }
+  }
+
+  return unique([...known, ...sectionSkills])
+    .filter((skill) => !/@|https?:|linkedin|github/i.test(skill))
+    .slice(0, 30);
 }
 
 function findRole(text: string) {
@@ -150,6 +168,22 @@ function findExperience(lines: string[]): ResumeExperience[] {
       result.push({ role, company, duration: lines[i], location: findLocation([...before, ...after].join(" ")), description });
     }
   }
+  if (!result.length) {
+    const start = lines.findIndex((line) => /^(experience|work experience|professional experience|employment history)$/i.test(line));
+    if (start >= 0) {
+      const section = lines.slice(start + 1, start + 16);
+      for (let i = 0; i < section.length && result.length < 4; i++) {
+        const line = section[i];
+        if (/^(education|projects?|skills|certifications?|achievements?)$/i.test(line)) break;
+        const roleMatch = ROLES.find((role) => line.toLowerCase().includes(role.toLowerCase()));
+        if (!roleMatch) continue;
+        const company = section[i + 1] && !/^(education|projects?|skills|certifications?)$/i.test(section[i + 1]) ? section[i + 1] : "";
+        const duration = section.slice(i, i + 4).find((value) => /\b(20\d{2}|19\d{2})\b/.test(value)) || "";
+        const description = section.slice(i + 2, i + 6).filter((value) => value.length > 25).join(" ").slice(0, 500);
+        result.push({ role: roleMatch, company, duration, location: findLocation(section.slice(i, i + 5).join(" ")), description });
+      }
+    }
+  }
   return result;
 }
 
@@ -158,8 +192,8 @@ function findEducation(lines: string[]): ResumeEducation[] {
   const results: ResumeEducation[] = [];
   for (let i = 0; i < lines.length && results.length < 6; i++) {
     if (!degreeRegex.test(lines[i])) continue;
-    const nearby = lines.slice(i, i + 4);
-    const institution = nearby.slice(1).find((line) => /(university|college|school|institute|academy|polytechnic)/i.test(line)) || "";
+    const nearby = lines.slice(Math.max(0, i - 2), i + 4);
+    const institution = nearby.find((line) => line !== lines[i] && /(university|college|school|institute|academy|polytechnic)/i.test(line)) || "";
     const year = nearby.join(" ").match(/\b(19|20)\d{2}\b/)?.[0] || "";
     results.push({ degree: lines[i], institution, year });
   }
@@ -252,7 +286,7 @@ export function parseResumeText(text: string, fallback: { name: string; email: s
     noticePeriod: findNoticePeriod(normalized),
     currentSalary: findSalary(normalized, "current"),
     expectedSalary: findSalary(normalized, "expected"),
-    parserVersion: "resume-parser-v1",
+    parserVersion: "resume-parser-v2",
   };
 }
 
