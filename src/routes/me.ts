@@ -584,6 +584,54 @@ router.get("/employer/dashboard", wrap(async (req, res) => {
   });
 }));
 
+router.patch("/Employer/applications/:applicationId", wrap(async (req, res) => {
+  if (!requireDb(res)) return;
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+  const Employer = await ensureEmployer(auth);
+  if (!Employer) return res.status(404).json({ error: "Employer profile not found for this email" });
+
+  const allowedStatuses = ["Applied", "Screening", "Shortlisted", "Interview", "Offer", "Hired", "Rejected"];
+  const nextStatus = String(req.body?.status || "").trim();
+  const notes = String(req.body?.notes ?? "").trim();
+  const tags = Array.isArray(req.body?.tags) ? req.body.tags.map(String).map((value: string) => value.trim()).filter(Boolean).slice(0, 10) : undefined;
+
+  if (nextStatus && !allowedStatuses.includes(nextStatus)) {
+    return res.status(400).json({ error: "Invalid application status" });
+  }
+
+  const jobsResult = await supabase!.from("sn_jobs").select("id").eq("company", Employer.companyName).limit(200);
+  if (jobsResult.error) throw jobsResult.error;
+  const ownedJobIds = (jobsResult.data || []).map((job: any) => job.id);
+  if (!ownedJobIds.length) return res.status(404).json({ error: "Application not found" });
+
+  const existing = await supabase!
+    .from("sn_applications")
+    .select("*")
+    .eq("id", req.params.applicationId)
+    .in("jobId", ownedJobIds)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  if (!existing.data) return res.status(404).json({ error: "Application not found" });
+
+  const patch: Record<string, unknown> = {
+    updatedAt: new Date().toISOString(),
+  };
+  if (nextStatus) patch.status = nextStatus;
+  if (req.body?.notes !== undefined) patch.notes = notes;
+  if (tags !== undefined) patch.tags = tags;
+
+  const { data, error } = await supabase!
+    .from("sn_applications")
+    .update(patch)
+    .eq("id", req.params.applicationId)
+    .select("*")
+    .single();
+  if (error) throw error;
+
+  return res.json({ data });
+}));
+
 router.get("/Employer/applications", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
