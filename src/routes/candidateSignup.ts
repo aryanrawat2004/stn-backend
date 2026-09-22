@@ -532,6 +532,101 @@ router.post("/applications", async (req, res) => {
   }
 });
 
+
+router.get("/applications", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+    const email = clean(req.query.email).toLowerCase();
+    if (!email) return res.status(400).json({ error: "Candidate email is required" });
+
+    const { data: candidate, error: candidateError } = await supabase
+      .from("sn_candidates")
+      .select("id,email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (candidateError) throw candidateError;
+    if (!candidate) return res.status(404).json({ error: "Candidate profile not found" });
+
+    const { data: applications, error: applicationsError } = await supabase
+      .from("sn_applications")
+      .select("*")
+      .eq("candidateId", candidate.id)
+      .order("appliedAt", { ascending: false });
+
+    if (applicationsError) throw applicationsError;
+
+    const jobIds = [...new Set((applications || []).map((item: any) => item.jobId).filter(Boolean))];
+    let jobs: any[] = [];
+
+    if (jobIds.length) {
+      const jobsResult = await supabase
+        .from("sn_jobs")
+        .select("*")
+        .in("id", jobIds);
+
+      if (jobsResult.error) throw jobsResult.error;
+      jobs = jobsResult.data || [];
+    }
+
+    const jobsById = new Map(jobs.map((job: any) => [String(job.id), job]));
+
+    return res.json({
+      data: (applications || []).map((application: any) => ({
+        ...application,
+        job: jobsById.get(String(application.jobId)) || null,
+      })),
+    });
+  } catch (error: any) {
+    console.error("Candidate applications fetch failed:", error);
+    return res.status(500).json({ error: error?.message || "Could not load candidate applications" });
+  }
+});
+
+router.delete("/applications/:applicationId", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+    const email = clean(req.query.email).toLowerCase();
+    const applicationId = clean(req.params.applicationId);
+
+    if (!email) return res.status(400).json({ error: "Candidate email is required" });
+    if (!applicationId) return res.status(400).json({ error: "Application id is required" });
+
+    const { data: candidate, error: candidateError } = await supabase
+      .from("sn_candidates")
+      .select("id,email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (candidateError) throw candidateError;
+    if (!candidate) return res.status(404).json({ error: "Candidate profile not found" });
+
+    const { data: existing, error: existingError } = await supabase
+      .from("sn_applications")
+      .select("id,candidateId")
+      .eq("id", applicationId)
+      .eq("candidateId", candidate.id)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+    if (!existing) return res.status(404).json({ error: "Application not found" });
+
+    const { error } = await supabase
+      .from("sn_applications")
+      .delete()
+      .eq("id", applicationId)
+      .eq("candidateId", candidate.id);
+
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error("Candidate application withdrawal failed:", error);
+    return res.status(500).json({ error: error?.message || "Could not withdraw application" });
+  }
+});
+
 router.post("/resume-parse", async (req, res) => {
   try {
     if (!supabase) return res.status(503).json({ error: "Database is not configured" });
