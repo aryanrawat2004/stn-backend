@@ -337,6 +337,11 @@ router.post("/applications", async (req, res) => {
 
     const email = clean(req.body?.email).toLowerCase();
     const jobId = clean(req.body?.jobId);
+    const jobTitle = clean(req.body?.jobTitle);
+    const jobCompany = clean(req.body?.jobCompany);
+    const jobLocation = clean(req.body?.jobLocation);
+    const jobType = clean(req.body?.jobType) || "Full-time";
+    const jobMode = clean(req.body?.jobMode);
     const fullName = clean(req.body?.fullName);
     const phone = clean(req.body?.phone).replace(/\D/g, "");
     const currentJobRole = clean(req.body?.currentJobRole);
@@ -424,6 +429,50 @@ router.post("/applications", async (req, res) => {
         .update(profilePatch)
         .eq("id", candidate.id);
       if (profileError) throw profileError;
+    }
+
+    const { data: existingJob, error: jobLookupError } = await supabase
+      .from("sn_jobs")
+      .select("*")
+      .eq("id", jobId)
+      .maybeSingle();
+
+    if (jobLookupError) throw jobLookupError;
+
+    if (!existingJob) {
+      if (!jobTitle || !jobCompany || !jobLocation) {
+        return res.status(404).json({
+          error: "This job is not available in the hiring catalog. Please reopen the job and try again.",
+          code: "JOB_CATALOG_ENTRY_MISSING",
+        });
+      }
+
+      const now = new Date().toISOString();
+      const jobRecord: Record<string, unknown> = {
+        id: jobId,
+        role: jobTitle,
+        company: jobCompany,
+        location: jobLocation,
+        type: jobType,
+        status: "Active",
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      if (jobMode) jobRecord.workMode = jobMode;
+
+      const { error: syncError } = await supabase
+        .from("sn_jobs")
+        .insert(jobRecord);
+
+      if (syncError) {
+        console.error("Application job catalog sync failed:", syncError);
+        return res.status(500).json({
+          error: "Could not prepare this job for applications. Please try again.",
+          detail: syncError.message,
+          code: "JOB_CATALOG_SYNC_FAILED",
+        });
+      }
     }
 
     const { data: duplicate, error: duplicateError } = await supabase
