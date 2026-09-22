@@ -294,8 +294,6 @@ router.post("/signup", upload.single("resume"), async (req, res) => {
       firebaseUid: firebaseUid || existing?.firebaseUid || null,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
-      notes: coverNote,
-      tags: primarySkill ? primarySkill.split(",").map((value) => value.trim()).filter(Boolean).slice(0, 8) : [],
     };
 
     const query = existing
@@ -419,6 +417,8 @@ router.post("/applications", async (req, res) => {
       appliedAt: now,
       createdAt: now,
       updatedAt: now,
+      notes: coverNote,
+      tags: primarySkill ? primarySkill.split(",").map((value) => value.trim()).filter(Boolean).slice(0, 8) : [],
     };
 
     const { data, error } = await supabase
