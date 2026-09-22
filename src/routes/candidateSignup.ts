@@ -686,6 +686,134 @@ router.get("/dashboard", async (req, res) => {
   }
 });
 
+router.get("/saved-jobs", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+    const email = clean(req.query.email).toLowerCase();
+    if (!email) return res.status(400).json({ error: "Candidate email is required" });
+
+    const { data: candidate, error: candidateError } = await supabase
+      .from("sn_candidates")
+      .select("id,email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (candidateError) throw candidateError;
+    if (!candidate) return res.status(404).json({ error: "Candidate profile not found" });
+
+    const { data: saved, error: savedError } = await supabase
+      .from("sn_saved_jobs")
+      .select("*")
+      .eq("candidateId", candidate.id)
+      .order("createdAt", { ascending: false });
+
+    if (savedError) throw savedError;
+
+    const jobIds = [...new Set((saved || []).map((item: any) => item.jobId).filter(Boolean))];
+    let jobs: any[] = [];
+
+    if (jobIds.length) {
+      const jobsResult = await supabase.from("sn_jobs").select("*").in("id", jobIds);
+      if (jobsResult.error) throw jobsResult.error;
+      jobs = jobsResult.data || [];
+    }
+
+    const jobsById = new Map(jobs.map((job: any) => [String(job.id), job]));
+    return res.json({
+      data: (saved || []).map((item: any) => ({
+        ...item,
+        job: jobsById.get(String(item.jobId)) || null,
+      })),
+    });
+  } catch (error: any) {
+    console.error("Candidate saved jobs fetch failed:", error);
+    return res.status(500).json({ error: error?.message || "Could not load saved jobs" });
+  }
+});
+
+router.post("/saved-jobs", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+    const email = clean(req.body?.email).toLowerCase();
+    const jobId = clean(req.body?.jobId);
+
+    if (!email) return res.status(400).json({ error: "Candidate email is required" });
+    if (!jobId) return res.status(400).json({ error: "Job id is required" });
+
+    const { data: candidate, error: candidateError } = await supabase
+      .from("sn_candidates")
+      .select("id,email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (candidateError) throw candidateError;
+    if (!candidate) return res.status(404).json({ error: "Candidate profile not found" });
+
+    const { data: existing, error: existingError } = await supabase
+      .from("sn_saved_jobs")
+      .select("*")
+      .eq("candidateId", candidate.id)
+      .eq("jobId", jobId)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+    if (existing) return res.json({ data: existing });
+
+    const payload = {
+      id: `SAV-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      candidateId: candidate.id,
+      jobId,
+      createdAt: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from("sn_saved_jobs")
+      .insert(payload)
+      .select("*")
+      .single();
+
+    if (error) throw error;
+    return res.status(201).json({ data });
+  } catch (error: any) {
+    console.error("Candidate save job failed:", error);
+    return res.status(500).json({ error: error?.message || "Could not save job" });
+  }
+});
+
+router.delete("/saved-jobs/:jobId", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+    const email = clean(req.query.email).toLowerCase();
+    const jobId = clean(req.params.jobId);
+
+    if (!email) return res.status(400).json({ error: "Candidate email is required" });
+
+    const { data: candidate, error: candidateError } = await supabase
+      .from("sn_candidates")
+      .select("id,email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (candidateError) throw candidateError;
+    if (!candidate) return res.status(404).json({ error: "Candidate profile not found" });
+
+    const { error } = await supabase
+      .from("sn_saved_jobs")
+      .delete()
+      .eq("candidateId", candidate.id)
+      .eq("jobId", jobId);
+
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error("Candidate unsave job failed:", error);
+    return res.status(500).json({ error: error?.message || "Could not remove saved job" });
+  }
+});
+
 router.get("/applications", async (req, res) => {
   try {
     if (!supabase) return res.status(503).json({ error: "Database is not configured" });
