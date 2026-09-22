@@ -53,26 +53,67 @@ function calculateMatch(candidate: Record<string, any>, job: Record<string, any>
   );
   const missingSkills = uniqueJobSkills.filter((skill) => !matchedSkills.includes(skill));
 
-  let score = 45;
-  if (uniqueJobSkills.length) {
-    score += Math.round((matchedSkills.length / uniqueJobSkills.length) * 35);
-  }
-
   const candidateRole = String(candidate.role || "").toLowerCase();
-  const jobRole = String(job.role || "").toLowerCase();
-  if (candidateRole && jobRole && (candidateRole.includes(jobRole) || jobRole.includes(candidateRole))) score += 10;
+  const jobRole = String(job.role || job.title || "").toLowerCase();
+  const roleScore = candidateRole && jobRole
+    ? (candidateRole.includes(jobRole) || jobRole.includes(candidateRole) ? 100 : candidateRole.split(/\s+/).some((term) => term.length > 3 && jobRole.includes(term)) ? 65 : 25)
+    : 0;
+
+  const skillsScore = uniqueJobSkills.length
+    ? Math.round((matchedSkills.length / uniqueJobSkills.length) * 100)
+    : (candidateSkills.length ? 55 : 0);
+
+  const candidateYears = Number(String(candidate.experience || candidate.resumeData?.yearsExperience || "").match(/\d+(?:\.\d+)?/)?.[0] || 0);
+  const jobExperienceText = String(job.experience || job.requirements || "");
+  const jobYears = Number(jobExperienceText.match(/\d+(?:\.\d+)?/)?.[0] || 0);
+  const experienceScore = jobYears
+    ? (candidateYears >= jobYears ? 100 : candidateYears >= Math.max(0, jobYears - 1) ? 75 : 35)
+    : (candidateYears ? 70 : 45);
 
   const candidateLocation = String(candidate.location || "").toLowerCase();
   const jobLocation = String(job.location || "").toLowerCase();
-  if (candidateLocation && jobLocation && (candidateLocation.includes(jobLocation) || jobLocation.includes(candidateLocation))) score += 5;
+  const remote = /remote|work from home|wfh/i.test(String(job.workMode || job.location || ""));
+  const locationScore = remote
+    ? 100
+    : candidateLocation && jobLocation && (candidateLocation.includes(jobLocation) || jobLocation.includes(candidateLocation))
+      ? 100
+      : candidateLocation && jobLocation
+        ? 45
+        : 50;
 
-  if (candidate.verified) score += 3;
-  if (Number(candidate.profileCompletion || 0) >= 80) score += 2;
+  const salaryText = String(job.salary || job.salaryRange || "");
+  const expectedSalary = String(candidate.expectedSalary || candidate.resumeData?.expectedSalary || "");
+  const salaryScore = salaryText && expectedSalary ? 75 : 50;
+
+  const notice = String(candidate.noticePeriod || candidate.resumeData?.noticePeriod || "").toLowerCase();
+  const immediate = /immediate|0\s*day|join\s*now/.test(notice);
+  const noticeScore = immediate ? 100 : notice ? (/15/.test(notice) ? 90 : /30/.test(notice) ? 80 : /60/.test(notice) ? 60 : 50) : 45;
+
+  const verifiedScore = candidate.is_verified || candidate.verified ? 100 : 0;
+
+  const score = Math.round(
+    roleScore * 0.20 +
+    skillsScore * 0.35 +
+    experienceScore * 0.15 +
+    locationScore * 0.10 +
+    salaryScore * 0.08 +
+    noticeScore * 0.07 +
+    verifiedScore * 0.05,
+  );
 
   return {
     score: Math.max(0, Math.min(100, score)),
     matchedSkills,
     missingSkills: missingSkills.slice(0, 5),
+    matchBreakdown: {
+      role: roleScore,
+      skills: skillsScore,
+      experience: experienceScore,
+      location: locationScore,
+      salary: salaryScore,
+      noticePeriod: noticeScore,
+      verifiedTalent: verifiedScore,
+    },
   };
 }
 
