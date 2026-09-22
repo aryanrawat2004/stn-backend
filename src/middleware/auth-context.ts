@@ -20,8 +20,12 @@ const allowedRoles = new Set<AppRole>([
 
 export function normalizeRole(value: unknown): AppRole | null {
   if (typeof value !== "string") return null;
-  const role = value.trim().toLowerCase() as AppRole;
-  return allowedRoles.has(role) ? role : null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "employer") return "Employer";
+  if (normalized === "candidate") return "candidate";
+  if (normalized === "ambassador") return "ambassador";
+  if (normalized === "admin") return "admin";
+  return null;
 }
 
 async function resolveSupabaseToken(token: string): Promise<AuthContext | null> {
@@ -47,8 +51,15 @@ async function resolveSupabaseToken(token: string): Promise<AuthContext | null> 
 }
 
 async function resolveFirebaseToken(token: string): Promise<AuthContext | null> {
-  const apiKey = process.env.FIREBASE_WEB_API_KEY?.trim();
-  if (!apiKey) return null;
+  // Firebase Web API keys are public project identifiers. Prefer an env value,
+  // but keep the SolarNaukri project key as a production-safe fallback so
+  // protected APIs can validate Firebase ID tokens on Render even when the
+  // env variable has not been added yet.
+  const apiKey =
+    process.env.FIREBASE_WEB_API_KEY?.trim() ||
+    process.env.FIREBASE_API_KEY?.trim() ||
+    process.env.VITE_FIREBASE_API_KEY?.trim() ||
+    "AIzaSyDBh11PA7eJbrxAD2Tl7AMOL-U1tsUXNGM";
 
   const response = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
