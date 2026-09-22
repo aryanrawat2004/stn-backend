@@ -294,6 +294,8 @@ router.post("/signup", upload.single("resume"), async (req, res) => {
       firebaseUid: firebaseUid || existing?.firebaseUid || null,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
+      notes: coverNote,
+      tags: primarySkill ? primarySkill.split(",").map((value) => value.trim()).filter(Boolean).slice(0, 8) : [],
     };
 
     const query = existing
@@ -310,25 +312,81 @@ router.post("/signup", upload.single("resume"), async (req, res) => {
   }
 });
 
+router.get("/application-access", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const email = clean(req.query.email).toLowerCase();
+    if (!email) return res.status(400).json({ error: "Candidate email is required" });
+
+    const { data: candidate, error } = await supabase
+      .from("sn_candidates")
+      .select("*")
+      .ilike("email", email)
+      .maybeSingle();
+    if (error) throw error;
+    if (!candidate) return res.status(404).json({ error: "Candidate profile not found" });
+
+    const access = await enforceCandidateApplicationLimit(candidate);
+    return res.json({ data: access });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || "Could not load application access" });
+  }
+});
+
 router.post("/applications", async (req, res) => {
   try {
     if (!supabase) return res.status(503).json({ error: "Database is not configured" });
 
     const email = clean(req.body?.email).toLowerCase();
     const jobId = clean(req.body?.jobId);
+    const fullName = clean(req.body?.fullName);
+    const phone = clean(req.body?.phone).replace(/\D/g, "");
+    const experience = clean(req.body?.experience);
+    const primarySkill = clean(req.body?.primarySkill);
+    const currentRole = clean(req.body?.currentRole);
+    const location = clean(req.body?.location);
+    const noticePeriod = clean(req.body?.noticePeriod);
+    const expectedSalary = clean(req.body?.expectedSalary);
+    const coverNote = clean(req.body?.coverNote).slice(0, 1200);
+
     if (!email || !jobId) {
       return res.status(400).json({ error: "Candidate email and jobId are required" });
+    }
+    if (phone && !/^[6-9]\d{9}$/.test(phone)) {
+      return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number" });
     }
 
     const { data: candidate, error: candidateError } = await supabase
       .from("sn_candidates")
-      .select("id,email")
+      .select("*")
       .ilike("email", email)
       .maybeSingle();
 
     if (candidateError) throw candidateError;
     if (!candidate) {
       return res.status(404).json({ error: "Candidate profile not found. Please complete candidate signup first." });
+    }
+
+    const profilePatch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (fullName) profilePatch.name = fullName;
+    if (phone) profilePatch.phone = phone;
+    if (experience) profilePatch.experience = experience;
+    if (currentRole) profilePatch.role = currentRole;
+    if (location) profilePatch.location = location;
+    if (noticePeriod) profilePatch.noticePeriod = noticePeriod;
+    if (expectedSalary) profilePatch.expectedSalary = expectedSalary;
+    if (primarySkill) {
+      const currentSkills = Array.isArray(candidate.skills) ? candidate.skills.map(String) : [];
+      const incomingSkills = primarySkill.split(",").map((value) => value.trim()).filter(Boolean);
+      profilePatch.skills = [...new Set([...currentSkills, ...incomingSkills])].slice(0, 30);
+    }
+
+    if (Object.keys(profilePatch).length > 1) {
+      const { error: profileError } = await supabase
+        .from("sn_candidates")
+        .update(profilePatch)
+        .eq("id", candidate.id);
+      if (profileError) throw profileError;
     }
 
     const { data: duplicate, error: duplicateError } = await supabase
