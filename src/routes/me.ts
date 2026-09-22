@@ -17,13 +17,15 @@ function requireDb(res: Response) {
   return true;
 }
 
-async function requireAuth(req: Request, res: Response): Promise<AuthContext | null> {
+type AuthenticatedContext = AuthContext & { email: string };
+
+async function requireAuth(req: Request, res: Response): Promise<AuthenticatedContext | null> {
   const auth = await resolveAuthContext(req);
   if (!auth?.email) {
     res.status(401).json({ error: "Authenticated email is required" });
     return null;
   }
-  return auth;
+  return auth as AuthenticatedContext;
 }
 
 function normalizeSkills(value: unknown): string[] {
