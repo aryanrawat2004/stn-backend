@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { supabase } from "../db";
+import { resolveAuthContext } from "../middleware/auth-context";
 
 const router = Router();
 
@@ -33,6 +34,14 @@ const STEP_DOCUMENTS = {
 
 type VerificationStep = keyof typeof STEP_DOCUMENTS;
 type StepStatus = "pending" | "submitted" | "under_review" | "verified" | "rejected";
+
+function stableUuid(input: string) {
+  const bytes = crypto.createHash("sha256").update(input.toLowerCase()).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
 
 function statusColumn(step: VerificationStep) {
   return `${step}_status`;
@@ -102,24 +111,41 @@ router.post("/", async (req, res) => {
 
     if (!fullName || !phone) return res.status(400).json({ error: "Full name and phone are required" });
 
+    const auth = await resolveAuthContext(req);
+    let verifiedIdentity: any = null;
+    if (auth?.email || auth?.uid) {
+      const userId = stableUuid(auth.uid || auth.email || "");
+      const { data: latestIdentity } = await supabase
+        .from("identity_verifications")
+        .select("aadhaar_last4,full_name,verified_at,status")
+        .eq("user_id", userId)
+        .eq("verification_type", "aadhaar_otp")
+        .eq("status", "verified")
+        .order("verified_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      verifiedIdentity = latestIdentity || null;
+    }
+
     const now = new Date().toISOString();
     const { data, error } = await supabase
       .from("candidate_verifications")
       .insert({
         id: crypto.randomUUID(),
         candidate_id: candidateId || null,
-        full_name: fullName,
+        full_name: verifiedIdentity?.full_name || fullName,
         phone,
         current_role: currentRole || null,
         experience: experience || null,
         location: location || null,
-        aadhaar_last4: aadhaarLast4 || null,
+        aadhaar_last4: verifiedIdentity?.aadhaar_last4 || aadhaarLast4 || null,
         police_reference_number: policeReferenceNumber || null,
         police_issue_date: policeIssueDate || null,
         police_issuing_authority: policeIssuingAuthority || null,
         police_state: policeState || null,
         status: "draft",
-        aadhaar_status: "pending",
+        aadhaar_status: verifiedIdentity ? "verified" : "pending",
+        aadhaar_verified_at: verifiedIdentity?.verified_at || null,
         employment_status: "pending",
         police_status: "pending",
         payment_status: "pending",
@@ -196,6 +222,20 @@ router.patch("/:verificationId/steps/:step/submit", async (req, res) => {
     if (documentsError) return res.status(500).json({ error: documentsError.message });
 
     const uploaded = (documents || []).map((row: { document_type: string }) => row.document_type);
+
+    if (step === "aadhaar") {
+      const { data: existingVerification, error: verificationLookupError } = await supabase
+        .from("candidate_verifications")
+        .select("aadhaar_status")
+        .eq("id", verificationId)
+        .single();
+      if (verificationLookupError) return res.status(500).json({ error: verificationLookupError.message });
+      if (existingVerification?.aadhaar_status === "verified") {
+        await refreshOverallStatus(verificationId);
+        return res.json({ message: "aadhaar verification already verified by OTP", data: existingVerification });
+      }
+    }
+
     const missing = STEP_DOCUMENTS[step].filter((type) => !uploaded.includes(type));
     if (missing.length) return res.status(400).json({ error: "Required documents are missing", missing });
 
@@ -223,7 +263,11 @@ router.patch("/:verificationId/submit", async (req, res) => {
     if (!details) return res.status(404).json({ error: "Verification not found" });
 
     const uploaded = details.documents.map((row: any) => row.document_type);
-    const required = Object.values(STEP_DOCUMENTS).flat();
+    const required = [
+      ...(details.verification.aadhaar_status === "verified" ? [] : STEP_DOCUMENTS.aadhaar),
+      ...STEP_DOCUMENTS.employment,
+      ...STEP_DOCUMENTS.police,
+    ];
     const missing = required.filter((type) => !uploaded.includes(type));
     if (missing.length) return res.status(400).json({ error: "Required documents are missing", missing });
 
