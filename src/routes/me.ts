@@ -774,6 +774,89 @@ router.patch("/Employer/applications/:applicationId", wrap(async (req, res) => {
   return res.json({ data });
 }));
 
+router.post("/Employer/applications/repair", wrap(async (req, res) => {
+  if (!requireDb(res)) return;
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  const employer = await ensureEmployer(auth);
+  if (!employer?.companyName) {
+    return res.json({ repaired: 0, data: [] });
+  }
+
+  const requestedJobIds = Array.isArray(req.body?.jobIds)
+    ? req.body.jobIds.map((value: unknown) => String(value || "").trim()).filter(Boolean).slice(0, 200)
+    : [];
+
+  if (!requestedJobIds.length) {
+    return res.json({ repaired: 0, data: [] });
+  }
+
+  const jobsResult = await supabase!
+    .from("sn_jobs")
+    .select("*")
+    .in("id", requestedJobIds);
+
+  if (jobsResult.error) throw jobsResult.error;
+
+  const employerCompany = normalizeCompanyIdentity(employer.companyName);
+  const ownedJobIds = (jobsResult.data || [])
+    .filter((job: any) => {
+      const jobCompany = normalizeCompanyIdentity(job.company);
+      return Boolean(
+        jobCompany &&
+        employerCompany &&
+        (jobCompany === employerCompany ||
+          jobCompany.includes(employerCompany) ||
+          employerCompany.includes(jobCompany))
+      );
+    })
+    .map((job: any) => String(job.id));
+
+  if (!ownedJobIds.length) {
+    return res.json({ repaired: 0, data: [] });
+  }
+
+  const employerScopeCandidates = [
+    auth.uid ? `employer:${String(auth.uid).toLowerCase()}` : "",
+    auth.email ? `employer:${String(auth.email).toLowerCase()}` : "",
+  ].filter(Boolean);
+
+  const employerScope = employerScopeCandidates[0] || null;
+
+  const applicationsResult = await supabase!
+    .from("sn_applications")
+    .select("*")
+    .in("jobId", ownedJobIds);
+
+  if (applicationsResult.error) throw applicationsResult.error;
+
+  let repaired = 0;
+  for (const application of applicationsResult.data || []) {
+    const patch: Record<string, unknown> = {
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (!application.employerEmail && auth.email) {
+      patch.employerEmail = auth.email;
+    }
+    if (!application.employerScope && employerScope) {
+      patch.employerScope = employerScope;
+    }
+
+    if (Object.keys(patch).length > 1) {
+      const updateResult = await supabase!
+        .from("sn_applications")
+        .update(patch)
+        .eq("id", application.id);
+
+      if (!updateResult.error) repaired += 1;
+    }
+  }
+
+  return res.json({ repaired, jobIds: ownedJobIds });
+}));
+
 router.get("/Employer/applications", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
