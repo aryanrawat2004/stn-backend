@@ -293,6 +293,43 @@ router.patch("/:verificationId/submit", async (req, res) => {
   }
 });
 
+router.get("/public/:verificationId", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+    const { data, error } = await supabase
+      .from("candidate_verifications")
+      .select("id,full_name,current_role,location,status,aadhaar_status,employment_status,police_status,payment_status,verified_at,submitted_at,created_at")
+      .eq("id", req.params.verificationId)
+      .maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "Talent Passport verification not found" });
+
+    const fullyVerified = data.status === "verified";
+    return res.json({
+      data: {
+        verificationId: data.id,
+        candidateName: data.full_name,
+        currentRole: data.current_role,
+        location: data.location,
+        status: data.status,
+        fullyVerified,
+        verifiedAt: data.verified_at,
+        submittedAt: data.submitted_at,
+        issuedBy: "SolarNaukri",
+        checks: {
+          aadhaar: data.aadhaar_status,
+          employment: data.employment_status,
+          police: data.police_status,
+          payment: data.payment_status,
+        },
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || "Could not verify Talent Passport" });
+  }
+});
+
 router.get("/admin/requests", async (_req, res) => {
   try {
     if (!supabase) return res.status(503).json({ error: "Database is not configured" });
