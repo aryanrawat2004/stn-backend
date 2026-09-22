@@ -7,6 +7,16 @@ import { enforceCandidateApplicationLimit, getCandidateApplicationAccess } from 
 
 const router = Router();
 
+function normalizeCompanyIdentity(value: unknown) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/\b(private|pvt|limited|ltd|llp|incorporated|inc|company|co)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const wrap = (fn: (req: Request, res: Response) => Promise<Response | void>) =>
   (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res)).catch(next);
 
@@ -787,17 +797,32 @@ router.get("/Employer/applications", wrap(async (req, res) => {
   }
 
   const ownedJobs: any[] = [];
+  const normalizedEmployerCompany = normalizeCompanyIdentity(companyName);
 
-  if (companyName) {
-    const byCompany = await supabase!
+  // Fetch the catalog once and compare normalized company identities.
+  // This tolerates names like "GreenRay Solar Solutions" vs
+  // "GreenRay Solar Solutions Pvt. Ltd." without leaking other employers' jobs.
+  if (normalizedEmployerCompany) {
+    const catalogResult = await supabase!
       .from("sn_jobs")
       .select("*")
-      .ilike("company", companyName)
-      .limit(200);
+      .limit(500);
 
-    if (byCompany.data) ownedJobs.push(...byCompany.data);
-    if (byCompany.error) {
-      console.warn("Employer applications company-job lookup failed:", byCompany.error.message);
+    if (catalogResult.data) {
+      for (const job of catalogResult.data) {
+        const normalizedJobCompany = normalizeCompanyIdentity(job.company);
+        if (
+          normalizedJobCompany &&
+          (normalizedJobCompany === normalizedEmployerCompany ||
+            normalizedJobCompany.includes(normalizedEmployerCompany) ||
+            normalizedEmployerCompany.includes(normalizedJobCompany))
+        ) {
+          ownedJobs.push(job);
+        }
+      }
+    }
+    if (catalogResult.error) {
+      console.warn("Employer applications catalog lookup failed:", catalogResult.error.message);
     }
   }
 
@@ -826,28 +851,68 @@ router.get("/Employer/applications", wrap(async (req, res) => {
   const jobs = Array.from(
     new Map(ownedJobs.filter(Boolean).map((job: any) => [String(job.id), job])).values()
   );
-
   const jobIds = jobs.map((job: any) => String(job.id)).filter(Boolean);
-  if (!jobIds.length) {
-    return res.json({ data: [], employer: employer || null });
+
+  const employerScopes = [
+    auth.uid ? `employer:${String(auth.uid).toLowerCase()}` : "",
+    auth.email ? `employer:${String(auth.email).toLowerCase()}` : "",
+  ].filter(Boolean);
+
+  const applicationRows = new Map<string, any>();
+
+  // Direct ownership is the strongest link for new applications.
+  if (auth.email) {
+    const byEmployerEmail = await supabase!
+      .from("sn_applications")
+      .select("*")
+      .ilike("employerEmail", auth.email)
+      .order("appliedAt", { ascending: false });
+
+    if (!byEmployerEmail.error) {
+      for (const item of byEmployerEmail.data || []) applicationRows.set(String(item.id), item);
+    }
   }
 
-  const applicationsResult = await supabase!
-    .from("sn_applications")
-    .select("*")
-    .in("jobId", jobIds)
-    .order("appliedAt", { ascending: false });
+  for (const scope of employerScopes) {
+    const byScope = await supabase!
+      .from("sn_applications")
+      .select("*")
+      .eq("employerScope", scope)
+      .order("appliedAt", { ascending: false });
 
-  if (applicationsResult.error) {
-    console.error("Employer applications lookup failed:", applicationsResult.error);
-    return res.status(500).json({
-      error: "Could not load applications",
-      detail: applicationsResult.error.message,
-    });
+    if (!byScope.error) {
+      for (const item of byScope.data || []) applicationRows.set(String(item.id), item);
+    }
   }
+
+  // Legacy applications did not store employer ownership. Recover them via
+  // the employer's normalized company/job relationship.
+  if (jobIds.length) {
+    const byJobs = await supabase!
+      .from("sn_applications")
+      .select("*")
+      .in("jobId", jobIds)
+      .order("appliedAt", { ascending: false });
+
+    if (byJobs.error) {
+      console.error("Employer applications lookup failed:", byJobs.error);
+      return res.status(500).json({
+        error: "Could not load applications",
+        detail: byJobs.error.message,
+      });
+    }
+
+    for (const item of byJobs.data || []) applicationRows.set(String(item.id), item);
+  }
+
+  const applicationData = Array.from(applicationRows.values()).sort(
+    (a: any, b: any) =>
+      new Date(b.appliedAt || b.createdAt || 0).getTime() -
+      new Date(a.appliedAt || a.createdAt || 0).getTime()
+  );
 
   const candidateIds = [...new Set(
-    (applicationsResult.data || [])
+    applicationData
       .map((item: any) => String(item.candidateId || ""))
       .filter(Boolean)
   )];
@@ -870,7 +935,7 @@ router.get("/Employer/applications", wrap(async (req, res) => {
   const byCandidate = new Map(candidates.map((candidate: any) => [String(candidate.id), candidate]));
 
   return res.json({
-    data: (applicationsResult.data || []).map((item: any) => ({
+    data: applicationData.map((item: any) => ({
       ...item,
       job: byJob.get(String(item.jobId)) || null,
       candidate: byCandidate.get(String(item.candidateId)) || null,
