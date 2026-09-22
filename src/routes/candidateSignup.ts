@@ -339,12 +339,19 @@ router.post("/applications", async (req, res) => {
     const jobId = clean(req.body?.jobId);
     const fullName = clean(req.body?.fullName);
     const phone = clean(req.body?.phone).replace(/\D/g, "");
-    const experience = clean(req.body?.experience);
-    const primarySkill = clean(req.body?.primarySkill);
-    const currentRole = clean(req.body?.currentRole);
-    const location = clean(req.body?.location);
-    const noticePeriod = clean(req.body?.noticePeriod);
+    const currentJobRole = clean(req.body?.currentJobRole);
+    const currentDesignation = clean(req.body?.currentDesignation);
+    const currentSalary = clean(req.body?.currentSalary);
     const expectedSalary = clean(req.body?.expectedSalary);
+    const currentLocation = clean(req.body?.currentLocation);
+    const hometownLocation = clean(req.body?.hometownLocation);
+    const preferredWorkLocation = clean(req.body?.preferredWorkLocation);
+    const totalExperience = clean(req.body?.totalExperience);
+    const relevantExperience = clean(req.body?.relevantExperience);
+    const highestQualification = clean(req.body?.highestQualification);
+    const workSkills = clean(req.body?.workSkills);
+    const reasonOfLeaving = clean(req.body?.reasonOfLeaving);
+    const noticePeriod = clean(req.body?.noticePeriod);
     const coverNote = clean(req.body?.coverNote).slice(0, 1200);
 
     if (!email || !jobId) {
@@ -368,16 +375,48 @@ router.post("/applications", async (req, res) => {
     const profilePatch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     if (fullName) profilePatch.name = fullName;
     if (phone) profilePatch.phone = phone;
-    if (experience) profilePatch.experience = experience;
-    if (currentRole) profilePatch.role = currentRole;
-    if (location) profilePatch.location = location;
-    if (noticePeriod) profilePatch.noticePeriod = noticePeriod;
+    if (currentJobRole) profilePatch.role = currentJobRole;
+    if (currentSalary) profilePatch.currentSalary = currentSalary;
     if (expectedSalary) profilePatch.expectedSalary = expectedSalary;
-    if (primarySkill) {
-      const currentSkills = Array.isArray(candidate.skills) ? candidate.skills.map(String) : [];
-      const incomingSkills = primarySkill.split(",").map((value) => value.trim()).filter(Boolean);
+    if (currentLocation) profilePatch.location = currentLocation;
+    if (totalExperience) profilePatch.experience = totalExperience;
+    if (noticePeriod) profilePatch.noticePeriod = noticePeriod;
+
+    const currentSkills = Array.isArray(candidate.skills) ? candidate.skills.map(String) : [];
+    const incomingSkills = workSkills
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (incomingSkills.length) {
       profilePatch.skills = [...new Set([...currentSkills, ...incomingSkills])].slice(0, 30);
     }
+
+    const existingResumeData =
+      candidate.resumeData && typeof candidate.resumeData === "object"
+        ? candidate.resumeData
+        : {};
+    profilePatch.resumeData = {
+      ...existingResumeData,
+      applicationProfile: {
+        fullName,
+        email,
+        phone,
+        currentJobRole,
+        currentDesignation,
+        currentSalary,
+        expectedSalary,
+        currentLocation,
+        hometownLocation,
+        preferredWorkLocation,
+        totalExperience,
+        relevantExperience,
+        highestQualification,
+        workSkills,
+        reasonOfLeaving,
+        noticePeriod,
+        updatedAt: new Date().toISOString(),
+      },
+    };
 
     if (Object.keys(profilePatch).length > 1) {
       const { error: profileError } = await supabase
@@ -418,7 +457,7 @@ router.post("/applications", async (req, res) => {
       createdAt: now,
       updatedAt: now,
       notes: coverNote,
-      tags: primarySkill ? primarySkill.split(",").map((value) => value.trim()).filter(Boolean).slice(0, 8) : [],
+      tags: incomingSkills.slice(0, 8),
     };
 
     const { data, error } = await supabase
