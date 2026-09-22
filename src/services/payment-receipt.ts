@@ -61,7 +61,7 @@ export function buildPaymentReceiptHtml(data: ReceiptData) {
 <table width="100%" cellpadding="0" cellspacing="0" role="presentation"><tr><td align="center" style="padding:28px 12px;">
 <table width="760" cellpadding="0" cellspacing="0" role="presentation" style="max-width:760px;width:100%;background:#ffffff;border-radius:22px;overflow:hidden;box-shadow:0 16px 50px rgba(7,59,102,.10);">
 <tr><td style="padding:28px 34px 18px;text-align:center;">
-  <div style="font-size:34px;font-weight:900;letter-spacing:1px;"><span style="color:#ff7a16;">SOLAR</span> <span style="color:#07559b;">NAUKRI</span></div>
+  <img src="https://www.solarnaukri.com/images/solar-naukri-logo.png?v=20260918" alt="SolarNaukri" width="220" style="display:block;width:220px;max-width:80%;height:auto;margin:0 auto;" />
   <div style="margin-top:7px;font-size:16px;color:#50687d;">India's Renewable Energy Career Network</div>
 </td></tr>
 <tr><td style="padding:0 24px;">
