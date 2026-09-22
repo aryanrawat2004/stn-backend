@@ -551,7 +551,7 @@ router.get("/sharepoint", async (req, res) => {
           haystack,
         };
       })
-      .filter(({ bucket, inferredWorkType, haystack, score }) => {
+      .filter(({ item, bucket, inferredWorkType, haystack, score }) => {
         const terms = search.split(/\s+/).filter(Boolean);
         const matchesSearch = !terms.length || terms.every((term) => haystack.includes(term));
         const matchesExperience = experience === "all" || bucket === experience;
