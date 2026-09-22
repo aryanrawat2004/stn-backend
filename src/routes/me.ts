@@ -3,6 +3,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { supabase } from "../db";
 import { resolveAuthContext, AuthContext } from "../middleware/auth-context";
 import { indexCandidateIntoAi } from "../services/resume-screener";
+import { enforceCandidateApplicationLimit, getCandidateApplicationAccess } from "../services/application-limit";
 
 const router = Router();
 
