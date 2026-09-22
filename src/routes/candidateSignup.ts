@@ -451,6 +451,14 @@ router.post("/applications", async (req, res) => {
     const reasonOfLeaving = clean(req.body?.reasonOfLeaving);
     const noticePeriod = clean(req.body?.noticePeriod);
     const coverNote = clean(req.body?.coverNote).slice(0, 1200);
+    const candidateScope = clean(req.body?.candidateScope);
+    const employerScope = clean(req.body?.employerScope);
+    const requestedEmployerEmail = clean(req.body?.employerEmail).toLowerCase();
+    const employerEmail =
+      requestedEmployerEmail ||
+      (employerScope.toLowerCase().startsWith("employer:") && employerScope.includes("@")
+        ? employerScope.slice("employer:".length).trim().toLowerCase()
+        : "");
 
     if (!email || !jobId) {
       return res.status(400).json({ error: "Candidate email and jobId are required" });
@@ -577,7 +585,25 @@ router.post("/applications", async (req, res) => {
 
     if (duplicateError) throw duplicateError;
     if (duplicate) {
-      return res.status(409).json({ error: "You have already applied to this job.", data: duplicate });
+      const ownershipPatch: Record<string, unknown> = {};
+      if (candidateScope) ownershipPatch.candidateScope = candidateScope;
+      ownershipPatch.candidateUid = String(candidate.firebaseUid || candidate.id || "");
+      ownershipPatch.candidateEmail = email;
+      if (employerScope) ownershipPatch.employerScope = employerScope;
+      if (employerEmail) ownershipPatch.employerEmail = employerEmail;
+      ownershipPatch.updatedAt = new Date().toISOString();
+
+      const repaired = await supabase
+        .from("sn_applications")
+        .update(ownershipPatch)
+        .eq("id", duplicate.id)
+        .select("*")
+        .single();
+
+      return res.status(409).json({
+        error: "You have already applied to this job.",
+        data: repaired.data || duplicate,
+      });
     }
 
     const applicationAccess = await enforceCandidateApplicationLimit(candidate);
@@ -600,6 +626,11 @@ router.post("/applications", async (req, res) => {
       updatedAt: now,
       notes: coverNote,
       tags: incomingSkills.slice(0, 8),
+      candidateScope: candidateScope || null,
+      candidateUid: String(candidate.firebaseUid || candidate.id || "") || null,
+      candidateEmail: email,
+      employerScope: employerScope || null,
+      employerEmail: employerEmail || null,
     };
 
     const { data, error } = await supabase
