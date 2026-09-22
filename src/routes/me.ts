@@ -865,7 +865,6 @@ router.get("/Employer/applications", wrap(async (req, res) => {
   const employer = await ensureEmployer(auth);
 
   let companyName = String(employer?.companyName || "").trim();
-
   if (!companyName) {
     const companyLookup = await supabase!
       .from("sn_companies")
@@ -874,125 +873,67 @@ router.get("/Employer/applications", wrap(async (req, res) => {
       .limit(1)
       .maybeSingle();
 
+    if (companyLookup.error) {
+      console.warn("Employer company lookup failed:", companyLookup.error.message);
+    }
     if (companyLookup.data?.companyName) {
       companyName = String(companyLookup.data.companyName).trim();
     }
   }
 
-  const ownedJobs: any[] = [];
   const normalizedEmployerCompany = normalizeCompanyIdentity(companyName);
+  if (!normalizedEmployerCompany) {
+    return res.json({ data: [], employer: employer || null, debug: { reason: "missing_company" } });
+  }
 
-  // Fetch the catalog once and compare normalized company identities.
-  // This tolerates names like "GreenRay Solar Solutions" vs
-  // "GreenRay Solar Solutions Pvt. Ltd." without leaking other employers' jobs.
-  if (normalizedEmployerCompany) {
-    const catalogResult = await supabase!
+  // Source of truth:
+  // sn_applications.jobId -> sn_jobs.id -> sn_jobs.company -> employer company.
+  // This intentionally does not depend on legacy employerScope/employerEmail fields.
+  const [applicationsResult, jobsResult] = await Promise.all([
+    supabase!
+      .from("sn_applications")
+      .select("*")
+      .order("appliedAt", { ascending: false })
+      .limit(1000),
+    supabase!
       .from("sn_jobs")
       .select("*")
-      .limit(500);
+      .limit(1000),
+  ]);
 
-    if (catalogResult.data) {
-      for (const job of catalogResult.data) {
-        const normalizedJobCompany = normalizeCompanyIdentity(job.company);
-        if (
-          normalizedJobCompany &&
-          (normalizedJobCompany === normalizedEmployerCompany ||
-            normalizedJobCompany.includes(normalizedEmployerCompany) ||
-            normalizedEmployerCompany.includes(normalizedJobCompany))
-        ) {
-          ownedJobs.push(job);
-        }
-      }
-    }
-    if (catalogResult.error) {
-      console.warn("Employer applications catalog lookup failed:", catalogResult.error.message);
-    }
-  }
+  if (applicationsResult.error) throw applicationsResult.error;
+  if (jobsResult.error) throw jobsResult.error;
 
-  if (!ownedJobs.length) {
-    for (const column of ["EmployerEmail", "applicationEmail"] as const) {
-      try {
-        const byEmail = await supabase!
-          .from("sn_jobs")
-          .select("*")
-          .eq(column, auth.email)
-          .limit(200);
+  const allJobs = jobsResult.data || [];
+  const jobsById = new Map(allJobs.map((job: any) => [String(job.id), job]));
 
-        if (byEmail.data?.length) {
-          ownedJobs.push(...byEmail.data);
-          break;
-        }
-        if (byEmail.error) {
-          console.warn(`Employer applications job lookup failed for ${column}:`, byEmail.error.message);
-        }
-      } catch (error: any) {
-        console.warn(`Employer applications job lookup threw for ${column}:`, error?.message || error);
-      }
-    }
-  }
+  const ownedJobs = allJobs.filter((job: any) => {
+    const normalizedJobCompany = normalizeCompanyIdentity(job.company);
+    if (!normalizedJobCompany) return false;
+    return (
+      normalizedJobCompany === normalizedEmployerCompany ||
+      normalizedJobCompany.includes(normalizedEmployerCompany) ||
+      normalizedEmployerCompany.includes(normalizedJobCompany)
+    );
+  });
 
-  const jobs = Array.from(
-    new Map(ownedJobs.filter(Boolean).map((job: any) => [String(job.id), job])).values()
-  );
-  const jobIds = jobs.map((job: any) => String(job.id)).filter(Boolean);
+  const ownedJobIds = new Set(ownedJobs.map((job: any) => String(job.id)));
 
-  const employerScopes = [
-    auth.uid ? `employer:${String(auth.uid).toLowerCase()}` : "",
-    auth.email ? `employer:${String(auth.email).toLowerCase()}` : "",
-  ].filter(Boolean);
+  const applicationData = (applicationsResult.data || []).filter((application: any) => {
+    const jobId = String(application.jobId || "");
+    if (ownedJobIds.has(jobId)) return true;
 
-  const applicationRows = new Map<string, any>();
-
-  // Direct ownership is the strongest link for new applications.
-  if (auth.email) {
-    const byEmployerEmail = await supabase!
-      .from("sn_applications")
-      .select("*")
-      .ilike("employerEmail", auth.email)
-      .order("appliedAt", { ascending: false });
-
-    if (!byEmployerEmail.error) {
-      for (const item of byEmployerEmail.data || []) applicationRows.set(String(item.id), item);
-    }
-  }
-
-  for (const scope of employerScopes) {
-    const byScope = await supabase!
-      .from("sn_applications")
-      .select("*")
-      .eq("employerScope", scope)
-      .order("appliedAt", { ascending: false });
-
-    if (!byScope.error) {
-      for (const item of byScope.data || []) applicationRows.set(String(item.id), item);
-    }
-  }
-
-  // Legacy applications did not store employer ownership. Recover them via
-  // the employer's normalized company/job relationship.
-  if (jobIds.length) {
-    const byJobs = await supabase!
-      .from("sn_applications")
-      .select("*")
-      .in("jobId", jobIds)
-      .order("appliedAt", { ascending: false });
-
-    if (byJobs.error) {
-      console.error("Employer applications lookup failed:", byJobs.error);
-      return res.status(500).json({
-        error: "Could not load applications",
-        detail: byJobs.error.message,
-      });
-    }
-
-    for (const item of byJobs.data || []) applicationRows.set(String(item.id), item);
-  }
-
-  const applicationData = Array.from(applicationRows.values()).sort(
-    (a: any, b: any) =>
-      new Date(b.appliedAt || b.createdAt || 0).getTime() -
-      new Date(a.appliedAt || a.createdAt || 0).getTime()
-  );
+    // Extra legacy recovery: if the app points to a job that exists, compare
+    // that linked job's company directly even if it was not captured above.
+    const linkedJob = jobsById.get(jobId);
+    const linkedCompany = normalizeCompanyIdentity(linkedJob?.company);
+    return Boolean(
+      linkedCompany &&
+      (linkedCompany === normalizedEmployerCompany ||
+        linkedCompany.includes(normalizedEmployerCompany) ||
+        normalizedEmployerCompany.includes(linkedCompany))
+    );
+  });
 
   const candidateIds = [...new Set(
     applicationData
@@ -1014,19 +955,46 @@ router.get("/Employer/applications", wrap(async (req, res) => {
     }
   }
 
-  const byJob = new Map(jobs.map((job: any) => [String(job.id), job]));
   const byCandidate = new Map(candidates.map((candidate: any) => [String(candidate.id), candidate]));
+
+  // Backfill ownership on rows we can now prove belong to this employer.
+  for (const application of applicationData) {
+    const patch: Record<string, unknown> = {};
+    if (!application.employerEmail && auth.email) patch.employerEmail = auth.email;
+    if (!application.employerScope) {
+      patch.employerScope = auth.uid
+        ? `employer:${String(auth.uid).toLowerCase()}`
+        : `employer:${String(auth.email).toLowerCase()}`;
+    }
+
+    if (Object.keys(patch).length) {
+      patch.updatedAt = new Date().toISOString();
+      const repair = await supabase!
+        .from("sn_applications")
+        .update(patch)
+        .eq("id", application.id);
+
+      if (repair.error) {
+        console.warn("Application ownership backfill failed:", repair.error.message);
+      }
+    }
+  }
 
   return res.json({
     data: applicationData.map((item: any) => ({
       ...item,
-      job: byJob.get(String(item.jobId)) || null,
+      job: jobsById.get(String(item.jobId)) || null,
       candidate: byCandidate.get(String(item.candidateId)) || null,
     })),
     employer: employer || null,
+    debug: {
+      companyName,
+      normalizedEmployerCompany,
+      jobsMatched: ownedJobs.length,
+      applicationsMatched: applicationData.length,
+    },
   });
 }));
-
 
 router.get("/Employer/company", wrap(async (req, res) => {
   if (!requireDb(res)) return;
