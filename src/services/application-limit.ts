@@ -3,27 +3,18 @@ import { supabase } from "../db";
 export const STANDARD_WEEKLY_APPLICATION_LIMIT = 4;
 const WINDOW_DAYS = 7;
 
-function asDate(value: unknown) {
-  const date = new Date(String(value || ""));
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
 export async function hasActiveTalentPassport(candidate: Record<string, any>) {
-  const now = new Date();
-
-  if (candidate?.is_verified === true) {
-    const validUntil = asDate(candidate?.verification_valid_until);
-    if (validUntil && validUntil.getTime() > now.getTime()) return true;
-  }
+  // Talent Passport is a one-time ₹999 verification. Once fully verified,
+  // it does not expire and permanently unlocks unlimited applications.
+  if (candidate?.is_verified === true) return true;
 
   if (!supabase || !candidate?.id) return false;
 
   const { data, error } = await supabase
     .from("candidate_verifications")
-    .select("id,valid_until,status")
+    .select("id,status")
     .eq("candidate_id", String(candidate.id))
     .eq("status", "verified")
-    .gt("valid_until", now.toISOString())
     .limit(1);
 
   if (error) {
