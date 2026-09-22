@@ -177,13 +177,100 @@ async function ensureCandidate(auth: AuthContext) {
 
 async function ensureEmployer(auth: AuthContext) {
   if (!supabase || !auth.email) return null;
-  const { data, error } = await supabase
+
+  const email = auth.email.trim().toLowerCase();
+
+  const { data: existing, error: existingError } = await supabase
     .from("sn_employers")
     .select("*")
-    .ilike("email", auth.email)
+    .ilike("email", email)
+    .limit(1)
     .maybeSingle();
-  if (error) throw error;
-  return data;
+
+  if (existingError) throw existingError;
+  if (existing) return existing;
+
+  // Older employer accounts may already have a company/job record but no
+  // sn_employers row. Recover that relationship automatically instead of
+  // blocking the hiring pipeline with "Employer profile not found".
+  const companyResult = await supabase
+    .from("sn_companies")
+    .select("*")
+    .ilike("email", email)
+    .limit(1)
+    .maybeSingle();
+
+  if (companyResult.error) throw companyResult.error;
+
+  let ownedJob: any = null;
+  if (!companyResult.data) {
+    const jobResult = await supabase
+      .from("sn_jobs")
+      .select("*")
+      .or(`EmployerEmail.ilike.${email},applicationEmail.ilike.${email}`)
+      .limit(1)
+      .maybeSingle();
+
+    if (jobResult.error) throw jobResult.error;
+    ownedJob = jobResult.data || null;
+  }
+
+  const company = companyResult.data || null;
+  if (!company && !ownedJob) return null;
+
+  const companyName = String(
+    company?.companyName ||
+    ownedJob?.company ||
+    ""
+  ).trim();
+
+  if (!companyName) return null;
+
+  const now = new Date().toISOString();
+  const employerRecord = {
+    id: `EMP-${randomUUID().slice(0, 8).toUpperCase()}`,
+    companyName,
+    contactPerson: String(
+      company?.contactPerson ||
+      ownedJob?.EmployerName ||
+      auth.name ||
+      email.split("@")[0]
+    ).trim(),
+    email,
+    location: String(company?.location || ownedJob?.location || "").trim(),
+    jobsPosted: Number(company?.jobsPosted || 0),
+    verified: Boolean(company?.verified),
+    joinedDate: String(company?.joinedDate || now.slice(0, 10)),
+    status: String(
+      company?.verificationStatus ||
+      company?.status ||
+      "Pending Verification"
+    ),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const { data: created, error: createError } = await supabase
+    .from("sn_employers")
+    .insert(employerRecord)
+    .select("*")
+    .single();
+
+  if (createError) {
+    // Handle a concurrent first request that created the same employer profile.
+    const retry = await supabase
+      .from("sn_employers")
+      .select("*")
+      .ilike("email", email)
+      .limit(1)
+      .maybeSingle();
+
+    if (retry.error) throw retry.error;
+    if (retry.data) return retry.data;
+    throw createError;
+  }
+
+  return created;
 }
 
 router.get("/candidate", wrap(async (req, res) => {
