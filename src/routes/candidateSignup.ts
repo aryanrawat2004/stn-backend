@@ -63,6 +63,99 @@ function mimeFromFileName(name: string) {
   return "application/octet-stream";
 }
 
+function normalizeSkillsForMatch(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String).map((v) => v.trim()).filter(Boolean);
+  if (typeof value === "string") {
+    return value.split(/[,|;]/g).map((v) => v.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function calculateCandidateJobMatch(candidate: Record<string, any>, job: Record<string, any>) {
+  const candidateSkills = normalizeSkillsForMatch(candidate.skills).map((s) => s.toLowerCase());
+  const jobSkills = [
+    ...normalizeSkillsForMatch(job.skills),
+    ...normalizeSkillsForMatch(job.tools),
+    ...normalizeSkillsForMatch(job.requirements),
+  ].map((s) => s.toLowerCase());
+
+  const uniqueJobSkills = [...new Set(jobSkills)].slice(0, 12);
+  const matchedSkills = uniqueJobSkills.filter((skill) =>
+    candidateSkills.some((candidateSkill) =>
+      candidateSkill.includes(skill) || skill.includes(candidateSkill),
+    ),
+  );
+  const missingSkills = uniqueJobSkills.filter((skill) => !matchedSkills.includes(skill));
+
+  const candidateRole = String(candidate.role || "").toLowerCase();
+  const jobRole = String(job.role || job.title || "").toLowerCase();
+  const roleScore = candidateRole && jobRole
+    ? (candidateRole.includes(jobRole) || jobRole.includes(candidateRole)
+      ? 100
+      : candidateRole.split(/\s+/).some((term) => term.length > 3 && jobRole.includes(term))
+        ? 65
+        : 25)
+    : 0;
+
+  const skillsScore = uniqueJobSkills.length
+    ? Math.round((matchedSkills.length / uniqueJobSkills.length) * 100)
+    : (candidateSkills.length ? 55 : 0);
+
+  const candidateYears = Number(String(candidate.experience || candidate.resumeData?.yearsExperience || "").match(/\d+(?:\.\d+)?/)?.[0] || 0);
+  const jobYears = Number(String(job.experience || job.requirements || "").match(/\d+(?:\.\d+)?/)?.[0] || 0);
+  const experienceScore = jobYears
+    ? (candidateYears >= jobYears ? 100 : candidateYears >= Math.max(0, jobYears - 1) ? 75 : 35)
+    : (candidateYears ? 70 : 45);
+
+  const candidateLocation = String(candidate.location || "").toLowerCase();
+  const jobLocation = String(job.location || "").toLowerCase();
+  const remote = /remote|work from home|wfh/i.test(String(job.workMode || job.location || ""));
+  const locationScore = remote
+    ? 100
+    : candidateLocation && jobLocation && (candidateLocation.includes(jobLocation) || jobLocation.includes(candidateLocation))
+      ? 100
+      : candidateLocation && jobLocation
+        ? 45
+        : 50;
+
+  const salaryScore = String(job.salary || job.salaryRange || "") && String(candidate.expectedSalary || candidate.resumeData?.expectedSalary || "")
+    ? 75
+    : 50;
+
+  const notice = String(candidate.noticePeriod || candidate.resumeData?.noticePeriod || "").toLowerCase();
+  const noticeScore = /immediate|0\s*day|join\s*now/.test(notice)
+    ? 100
+    : notice
+      ? (/15/.test(notice) ? 90 : /30/.test(notice) ? 80 : /60/.test(notice) ? 60 : 50)
+      : 45;
+
+  const verifiedScore = candidate.is_verified || candidate.verified ? 100 : 0;
+  const score = Math.round(
+    roleScore * 0.20 +
+    skillsScore * 0.35 +
+    experienceScore * 0.15 +
+    locationScore * 0.10 +
+    salaryScore * 0.08 +
+    noticeScore * 0.07 +
+    verifiedScore * 0.05,
+  );
+
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    matchedSkills,
+    missingSkills: missingSkills.slice(0, 5),
+    matchBreakdown: {
+      role: roleScore,
+      skills: skillsScore,
+      experience: experienceScore,
+      location: locationScore,
+      salary: salaryScore,
+      noticePeriod: noticeScore,
+      verifiedTalent: verifiedScore,
+    },
+  };
+}
+
 function emptyParsedResume() {
   return {
     role: "Solar Candidate",
@@ -532,6 +625,66 @@ router.post("/applications", async (req, res) => {
   }
 });
 
+
+router.get("/dashboard", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+    const email = clean(req.query.email).toLowerCase();
+    if (!email) return res.status(400).json({ error: "Candidate email is required" });
+
+    const { data: candidate, error: candidateError } = await supabase
+      .from("sn_candidates")
+      .select("*")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (candidateError) throw candidateError;
+    if (!candidate) return res.status(404).json({ error: "Candidate profile not found" });
+
+    const [applicationsResult, savedResult, jobsResult] = await Promise.all([
+      supabase.from("sn_applications").select("*").eq("candidateId", candidate.id),
+      supabase.from("sn_saved_jobs").select("*").eq("candidateId", candidate.id),
+      supabase.from("sn_jobs").select("*").eq("status", "Active").limit(200),
+    ]);
+
+    if (applicationsResult.error) throw applicationsResult.error;
+    if (savedResult.error) throw savedResult.error;
+    if (jobsResult.error) throw jobsResult.error;
+
+    const applications = applicationsResult.data || [];
+    const jobs = jobsResult.data || [];
+    const matches = jobs
+      .map((job: any) => ({ job, ...calculateCandidateJobMatch(candidate, job) }))
+      .sort((a, b) => b.score - a.score);
+
+    const interviews = applications.filter((item: any) => item.status === "Interview").length;
+    const shortlisted = applications.filter((item: any) =>
+      ["Screening", "Shortlisted", "Interview", "Offer"].includes(item.status)
+    ).length;
+
+    return res.json({
+      data: {
+        candidate,
+        metrics: {
+          profileCompletion: Number(candidate.profileCompletion || 0),
+          talentPassportScore: Number(candidate.talentPassportScore || 0),
+          resumeStrength: Number(candidate.resumeStrength || 0),
+          applications: applications.length,
+          shortlisted,
+          interviews,
+          savedJobs: (savedResult.data || []).length,
+          EmployerViews: Number(candidate.profileViews || 0),
+          jobMatches: matches.filter((item) => item.score >= 60).length,
+        },
+        recommendedJobs: matches.slice(0, 5),
+      },
+    });
+  } catch (error: any) {
+    console.error("Candidate dashboard fetch failed:", error);
+    return res.status(500).json({ error: error?.message || "Could not load candidate dashboard" });
+  }
+});
 
 router.get("/applications", async (req, res) => {
   try {
