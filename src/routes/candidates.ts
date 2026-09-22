@@ -74,10 +74,11 @@ router.get("/", wrap(async (req, res) => {
 
   let applications: any[] = [];
   let savedJobs: any[] = [];
+  let appliedJobRows: any[] = [];
 
   if (candidateIds.length) {
     const [applicationResult, savedJobsResult] = await Promise.all([
-      supabase.from("sn_applications").select("candidateId").in("candidateId", candidateIds),
+      supabase.from("sn_applications").select("id,candidateId,jobId,status,appliedAt,createdAt").in("candidateId", candidateIds),
       supabase.from("sn_saved_jobs").select("candidateId").in("candidateId", candidateIds),
     ]);
 
@@ -102,9 +103,42 @@ router.get("/", wrap(async (req, res) => {
 
   const applicationCounts = new Map<string, number>();
   const savedCounts = new Map<string, number>();
+
+  const jobIds = [...new Set(applications.map((item: any) => String(item.jobId || "")).filter(Boolean))];
+  if (jobIds.length) {
+    const { data: jobRows, error: jobError } = await supabase
+      .from("sn_jobs")
+      .select("id,role,company,location,status")
+      .in("id", jobIds);
+
+    if (jobError) {
+      console.warn("Admin candidate list: sn_jobs enrichment unavailable; continuing with application IDs:", jobError.message);
+    } else {
+      appliedJobRows = jobRows || [];
+    }
+  }
+
+  const jobsById = new Map(appliedJobRows.map((job: any) => [String(job.id), job]));
+  const applicationsByCandidate = new Map<string, any[]>();
+
   for (const item of applications) {
     const id = String(item.candidateId);
     applicationCounts.set(id, (applicationCounts.get(id) || 0) + 1);
+
+    const jobId = String(item.jobId || "");
+    const job = jobsById.get(jobId) || {};
+    const current = applicationsByCandidate.get(id) || [];
+    current.push({
+      applicationId: String(item.id || ""),
+      jobId,
+      jobTitle: String(job.role || "Job"),
+      company: String(job.company || ""),
+      location: String(job.location || ""),
+      jobStatus: String(job.status || ""),
+      applicationStatus: String(item.status || "Applied"),
+      appliedAt: String(item.appliedAt || item.createdAt || ""),
+    });
+    applicationsByCandidate.set(id, current);
   }
   for (const item of savedJobs) {
     const id = String(item.candidateId);
@@ -118,6 +152,9 @@ router.get("/", wrap(async (req, res) => {
     verified: Boolean(candidate.verified),
     accountStatus: candidate.accountStatus || "Active",
     applicationsCount: applicationCounts.get(String(candidate.id)) || 0,
+    appliedJobs: (applicationsByCandidate.get(String(candidate.id)) || []).sort((a: any, b: any) =>
+      new Date(b.appliedAt || 0).getTime() - new Date(a.appliedAt || 0).getTime()
+    ),
     savedJobsCount: savedCounts.get(String(candidate.id)) || 0,
     profileViews: Number(candidate.profileViews || 0),
     resumeAccessUrl: await signedResumeUrl(candidate),
