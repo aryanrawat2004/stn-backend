@@ -3,6 +3,7 @@ import multer from "multer";
 import { supabase } from "../db";
 import { resolveAuthContext } from "../middleware/auth-context";
 import { calculateProfileScores, extractResumeText, parseResumeText } from "../services/resumeParser";
+import { enforceCandidateApplicationLimit } from "../services/application-limit";
 
 const router = Router();
 
@@ -228,6 +229,15 @@ router.post("/applications", async (req, res) => {
       return res.status(409).json({ error: "You have already applied to this job.", data: duplicate });
     }
 
+    const applicationAccess = await enforceCandidateApplicationLimit(candidate);
+    if (!applicationAccess.allowed) {
+      return res.status(429).json({
+        error: "Weekly application limit reached. Standard candidates can apply to up to 4 jobs in a rolling 7-day period. Verify your Talent Passport for unlimited job applications.",
+        code: "WEEKLY_APPLICATION_LIMIT_REACHED",
+        access: applicationAccess,
+      });
+    }
+
     const now = new Date().toISOString();
     const record = {
       id: clean(req.body?.id) || `APP-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
@@ -246,7 +256,16 @@ router.post("/applications", async (req, res) => {
       .single();
 
     if (error) throw error;
-    return res.status(201).json({ data });
+
+    const updatedAccess = applicationAccess.unlimited
+      ? applicationAccess
+      : {
+          ...applicationAccess,
+          usedThisWeek: applicationAccess.usedThisWeek + 1,
+          remainingThisWeek: Math.max(0, Number(applicationAccess.remainingThisWeek || 0) - 1),
+        };
+
+    return res.status(201).json({ data, access: updatedAccess });
   } catch (error: any) {
     console.error("Candidate application persistence failed:", error);
     return res.status(500).json({ error: error?.message || "Could not save candidate application" });
