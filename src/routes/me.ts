@@ -180,19 +180,19 @@ async function ensureEmployer(auth: AuthContext) {
 
   const email = auth.email.trim().toLowerCase();
 
-  const { data: existing, error: existingError } = await supabase
+  const existingResult = await supabase
     .from("sn_employers")
     .select("*")
     .ilike("email", email)
     .limit(1)
     .maybeSingle();
 
-  if (existingError) throw existingError;
-  if (existing) return existing;
+  if (existingResult.data) return existingResult.data;
+  if (existingResult.error) {
+    console.warn("Employer lookup failed:", existingResult.error.message);
+  }
 
-  // Older employer accounts may already have a company/job record but no
-  // sn_employers row. Recover that relationship automatically instead of
-  // blocking the hiring pipeline with "Employer profile not found".
+  let company: any = null;
   const companyResult = await supabase
     .from("sn_companies")
     .select("*")
@@ -200,35 +200,40 @@ async function ensureEmployer(auth: AuthContext) {
     .limit(1)
     .maybeSingle();
 
-  if (companyResult.error) throw companyResult.error;
-
-  let ownedJob: any = null;
-  if (!companyResult.data) {
-    const jobResult = await supabase
-      .from("sn_jobs")
-      .select("*")
-      .or(`EmployerEmail.ilike.${email},applicationEmail.ilike.${email}`)
-      .limit(1)
-      .maybeSingle();
-
-    if (jobResult.error) throw jobResult.error;
-    ownedJob = jobResult.data || null;
+  if (companyResult.data) company = companyResult.data;
+  if (companyResult.error) {
+    console.warn("Company lookup during employer recovery failed:", companyResult.error.message);
   }
 
-  const company = companyResult.data || null;
-  if (!company && !ownedJob) return null;
+  let ownedJob: any = null;
 
-  const companyName = String(
-    company?.companyName ||
-    ownedJob?.company ||
-    ""
-  ).trim();
+  // Legacy accounts can have jobs linked by either EmployerEmail or applicationEmail.
+  // Query the columns independently so one missing/legacy column cannot crash the API.
+  for (const column of ["EmployerEmail", "applicationEmail"] as const) {
+    if (ownedJob) break;
+    try {
+      const result = await supabase
+        .from("sn_jobs")
+        .select("*")
+        .eq(column, email)
+        .limit(1)
+        .maybeSingle();
 
+      if (result.data) ownedJob = result.data;
+      if (result.error) {
+        console.warn(`Employer job recovery lookup failed for ${column}:`, result.error.message);
+      }
+    } catch (error: any) {
+      console.warn(`Employer job recovery lookup threw for ${column}:`, error?.message || error);
+    }
+  }
+
+  const companyName = String(company?.companyName || ownedJob?.company || "").trim();
   if (!companyName) return null;
 
   const now = new Date().toISOString();
   const employerRecord = {
-    id: `EMP-${randomUUID().slice(0, 8).toUpperCase()}`,
+    id: `employer-${auth.uid || email}`,
     companyName,
     contactPerson: String(
       company?.contactPerson ||
@@ -250,27 +255,26 @@ async function ensureEmployer(auth: AuthContext) {
     updatedAt: now,
   };
 
-  const { data: created, error: createError } = await supabase
+  const upsertResult = await supabase
     .from("sn_employers")
-    .insert(employerRecord)
+    .upsert(employerRecord, { onConflict: "id" })
     .select("*")
     .single();
 
-  if (createError) {
-    // Handle a concurrent first request that created the same employer profile.
-    const retry = await supabase
-      .from("sn_employers")
-      .select("*")
-      .ilike("email", email)
-      .limit(1)
-      .maybeSingle();
+  if (upsertResult.data) return upsertResult.data;
 
-    if (retry.error) throw retry.error;
-    if (retry.data) return retry.data;
-    throw createError;
+  if (upsertResult.error) {
+    console.warn("Employer auto-provision failed:", upsertResult.error.message);
+
+    // The pipeline can still operate from company/job ownership even when
+    // the legacy employer table cannot be written.
+    return {
+      ...employerRecord,
+      id: employerRecord.id,
+    };
   }
 
-  return created;
+  return employerRecord;
 }
 
 router.get("/candidate", wrap(async (req, res) => {
@@ -764,38 +768,114 @@ router.get("/Employer/applications", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
   if (!auth) return;
-  const Employer = await ensureEmployer(auth);
-  if (!Employer) return res.status(404).json({ error: "Employer profile not found for this email" });
 
-  const jobsResult = await supabase!.from("sn_jobs").select("*").eq("company", Employer.companyName).limit(200);
-  if (jobsResult.error) throw jobsResult.error;
-  const jobs = jobsResult.data || [];
-  const jobIds = jobs.map((job: any) => job.id);
-  if (!jobIds.length) return res.json({ data: [] });
+  const employer = await ensureEmployer(auth);
+
+  let companyName = String(employer?.companyName || "").trim();
+
+  if (!companyName) {
+    const companyLookup = await supabase!
+      .from("sn_companies")
+      .select("companyName")
+      .ilike("email", auth.email)
+      .limit(1)
+      .maybeSingle();
+
+    if (companyLookup.data?.companyName) {
+      companyName = String(companyLookup.data.companyName).trim();
+    }
+  }
+
+  const ownedJobs: any[] = [];
+
+  if (companyName) {
+    const byCompany = await supabase!
+      .from("sn_jobs")
+      .select("*")
+      .ilike("company", companyName)
+      .limit(200);
+
+    if (byCompany.data) ownedJobs.push(...byCompany.data);
+    if (byCompany.error) {
+      console.warn("Employer applications company-job lookup failed:", byCompany.error.message);
+    }
+  }
+
+  if (!ownedJobs.length) {
+    for (const column of ["EmployerEmail", "applicationEmail"] as const) {
+      try {
+        const byEmail = await supabase!
+          .from("sn_jobs")
+          .select("*")
+          .eq(column, auth.email)
+          .limit(200);
+
+        if (byEmail.data?.length) {
+          ownedJobs.push(...byEmail.data);
+          break;
+        }
+        if (byEmail.error) {
+          console.warn(`Employer applications job lookup failed for ${column}:`, byEmail.error.message);
+        }
+      } catch (error: any) {
+        console.warn(`Employer applications job lookup threw for ${column}:`, error?.message || error);
+      }
+    }
+  }
+
+  const jobs = Array.from(
+    new Map(ownedJobs.filter(Boolean).map((job: any) => [String(job.id), job])).values()
+  );
+
+  const jobIds = jobs.map((job: any) => String(job.id)).filter(Boolean);
+  if (!jobIds.length) {
+    return res.json({ data: [], employer: employer || null });
+  }
 
   const applicationsResult = await supabase!
     .from("sn_applications")
     .select("*")
     .in("jobId", jobIds)
     .order("appliedAt", { ascending: false });
-  if (applicationsResult.error) throw applicationsResult.error;
 
-  const candidateIds = [...new Set((applicationsResult.data || []).map((item: any) => item.candidateId))];
-  let candidates: any[] = [];
-  if (candidateIds.length) {
-    const result = await supabase!.from("sn_candidates").select("*").in("id", candidateIds);
-    if (result.error) throw result.error;
-    candidates = result.data || [];
+  if (applicationsResult.error) {
+    console.error("Employer applications lookup failed:", applicationsResult.error);
+    return res.status(500).json({
+      error: "Could not load applications",
+      detail: applicationsResult.error.message,
+    });
   }
 
-  const byJob = new Map(jobs.map((job: any) => [job.id, job]));
-  const byCandidate = new Map(candidates.map((candidate: any) => [candidate.id, candidate]));
-  res.json({
+  const candidateIds = [...new Set(
+    (applicationsResult.data || [])
+      .map((item: any) => String(item.candidateId || ""))
+      .filter(Boolean)
+  )];
+
+  let candidates: any[] = [];
+  if (candidateIds.length) {
+    const candidateResult = await supabase!
+      .from("sn_candidates")
+      .select("*")
+      .in("id", candidateIds);
+
+    if (candidateResult.error) {
+      console.warn("Employer applications candidate lookup failed:", candidateResult.error.message);
+    } else {
+      candidates = candidateResult.data || [];
+    }
+  }
+
+  const byJob = new Map(jobs.map((job: any) => [String(job.id), job]));
+  const byCandidate = new Map(candidates.map((candidate: any) => [String(candidate.id), candidate]));
+
+  return res.json({
     data: (applicationsResult.data || []).map((item: any) => ({
       ...item,
-      job: byJob.get(item.jobId) || null,
-      candidate: byCandidate.get(item.candidateId) || null,
+      job: byJob.get(String(item.jobId)) || null,
+      candidate: byCandidate.get(String(item.candidateId)) || null,
     })),
+    employer: employer || null,
   });
 }));
 
