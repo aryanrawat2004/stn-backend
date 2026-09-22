@@ -42,6 +42,27 @@ function experienceBucket(years: number | null) {
   return "10+ Years";
 }
 
+function resumeNeedsReparse(data: any) {
+  if (!data || typeof data !== "object") return true;
+  const version = String(data.parserVersion || "");
+  const hasUsefulData = Boolean(
+    (Array.isArray(data.skills) && data.skills.length) ||
+    (Array.isArray(data.experience) && data.experience.length) ||
+    (Array.isArray(data.education) && data.education.length) ||
+    (Array.isArray(data.projects) && data.projects.length) ||
+    (data.about && String(data.about).trim())
+  );
+  return !hasUsefulData || version !== "resume-parser-v2";
+}
+
+function mimeFromFileName(name: string) {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".doc")) return "application/msword";
+  return "application/octet-stream";
+}
+
 function emptyParsedResume() {
   return {
     role: "Solar Candidate",
@@ -105,8 +126,73 @@ router.get("/profile", async (req, res) => {
 
     let resumeAccessUrl: string | null = null;
     const storedUrl = String(data.resumeUrl || "");
-    if (storedUrl.startsWith("storage://candidate-resumes/")) {
-      const storagePath = storedUrl.replace("storage://candidate-resumes/", "");
+    const storagePath = String(data.resumePath || (storedUrl.startsWith("storage://candidate-resumes/") ? storedUrl.replace("storage://candidate-resumes/", "") : ""));
+
+    if (storagePath && resumeNeedsReparse(data.resumeData)) {
+      try {
+        const { data: downloaded, error: downloadError } = await supabase.storage
+          .from("candidate-resumes")
+          .download(storagePath);
+
+        if (!downloadError && downloaded) {
+          const bytes = Buffer.from(await downloaded.arrayBuffer());
+          const fileName = String(data.resumeName || storagePath.split("/").pop() || "resume.pdf");
+          const pseudoFile = {
+            fieldname: "resume",
+            originalname: fileName,
+            encoding: "7bit",
+            mimetype: mimeFromFileName(fileName),
+            size: bytes.byteLength,
+            buffer: bytes,
+            destination: "",
+            filename: fileName,
+            path: storagePath,
+          } as Express.Multer.File;
+
+          const resumeText = await extractResumeText(pseudoFile);
+          if (resumeText) {
+            const parsed = parseResumeText(resumeText, {
+              name: String(data.name || ""),
+              email: String(data.email || ""),
+              phone: String(data.phone || ""),
+            });
+            const scores = calculateProfileScores(parsed, true);
+            const years = typeof parsed.yearsExperience === "number" ? parsed.yearsExperience : null;
+            const patch: Record<string, unknown> = {
+              resumeText,
+              resumeData: parsed,
+              resumeParsedAt: new Date().toISOString(),
+              profileCompletion: scores.profileCompletion,
+              resumeStrength: scores.resumeStrength,
+              updatedAt: new Date().toISOString(),
+            };
+
+            if (parsed.role && parsed.role !== "Solar Candidate") patch.role = parsed.role;
+            if (parsed.location && parsed.location !== "India") patch.location = parsed.location;
+            const experience = experienceBucket(years);
+            if (experience) patch.experience = experience;
+            if (parsed.skills.length) patch.skills = parsed.skills;
+            if (parsed.about) patch.about = parsed.about;
+            if (parsed.noticePeriod) patch.noticePeriod = parsed.noticePeriod;
+            if (parsed.currentSalary) patch.currentSalary = parsed.currentSalary;
+            if (parsed.expectedSalary) patch.expectedSalary = parsed.expectedSalary;
+
+            const updated = await supabase
+              .from("sn_candidates")
+              .update(patch)
+              .eq("id", data.id)
+              .select("*")
+              .single();
+
+            if (!updated.error && updated.data) data = updated.data;
+          }
+        }
+      } catch (parseError) {
+        console.warn("Automatic resume re-parse failed:", parseError);
+      }
+    }
+
+    if (storagePath) {
       const { data: signed } = await supabase.storage.from("candidate-resumes").createSignedUrl(storagePath, 60 * 30);
       resumeAccessUrl = signed?.signedUrl || null;
     } else if (storedUrl) {
