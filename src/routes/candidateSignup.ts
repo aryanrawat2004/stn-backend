@@ -69,10 +69,38 @@ router.get("/profile", async (req, res) => {
     const email = clean(req.query.email).toLowerCase();
     if (!id && !email) return res.status(400).json({ error: "Candidate id or email is required" });
 
-    let query = supabase.from("sn_candidates").select("*");
-    query = id ? query.eq("id", id) : query.eq("email", email);
-    const { data, error } = await query.maybeSingle();
-    if (error) return res.status(500).json({ error: error.message });
+    let data: any = null;
+
+    if (id) {
+      const byId = await supabase
+        .from("sn_candidates")
+        .select("*")
+        .eq("id", id)
+        .maybeSingle();
+      if (byId.error) return res.status(500).json({ error: byId.error.message });
+      data = byId.data;
+
+      if (!data) {
+        const byFirebaseUid = await supabase
+          .from("sn_candidates")
+          .select("*")
+          .eq("firebaseUid", id)
+          .maybeSingle();
+        if (byFirebaseUid.error) return res.status(500).json({ error: byFirebaseUid.error.message });
+        data = byFirebaseUid.data;
+      }
+    }
+
+    if (!data && email) {
+      const byEmail = await supabase
+        .from("sn_candidates")
+        .select("*")
+        .ilike("email", email)
+        .maybeSingle();
+      if (byEmail.error) return res.status(500).json({ error: byEmail.error.message });
+      data = byEmail.data;
+    }
+
     if (!data) return res.status(404).json({ error: "Candidate not found" });
 
     let resumeAccessUrl: string | null = null;
