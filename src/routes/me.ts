@@ -325,6 +325,17 @@ router.get("/applications", wrap(async (req, res) => {
   res.json({ data: (applications || []).map((application: any) => ({ ...application, job: byJob.get(application.jobId) || null })) });
 }));
 
+router.get("/application-access", wrap(async (req, res) => {
+  if (!requireDb(res)) return;
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+  const candidate = await ensureCandidate(auth);
+  if (!candidate) return res.status(404).json({ error: "Candidate not found" });
+
+  const access = await getCandidateApplicationAccess(candidate);
+  return res.json({ data: access });
+}));
+
 router.post("/applications", wrap(async (req, res) => {
   if (!requireDb(res)) return;
   const auth = await requireAuth(req, res);
@@ -348,6 +359,15 @@ router.post("/applications", wrap(async (req, res) => {
   if (existing.error) throw existing.error;
   if (existing.data) return res.status(409).json({ error: "You have already applied for this job" });
 
+  const applicationAccess = await enforceCandidateApplicationLimit(candidate);
+  if (!applicationAccess.allowed) {
+    return res.status(429).json({
+      error: "Weekly application limit reached. Standard candidates can apply to up to 4 jobs in a rolling 7-day period. Verify your Talent Passport for unlimited job applications.",
+      code: "WEEKLY_APPLICATION_LIMIT_REACHED",
+      access: applicationAccess,
+    });
+  }
+
   const now = new Date().toISOString();
   const { data, error } = await supabase!
     .from("sn_applications")
@@ -364,7 +384,16 @@ router.post("/applications", wrap(async (req, res) => {
     .select("*")
     .single();
   if (error) throw error;
-  res.status(201).json({ data });
+
+  const updatedAccess = applicationAccess.unlimited
+    ? applicationAccess
+    : {
+        ...applicationAccess,
+        usedThisWeek: applicationAccess.usedThisWeek + 1,
+        remainingThisWeek: Math.max(0, Number(applicationAccess.remainingThisWeek || 0) - 1),
+      };
+
+  res.status(201).json({ data, access: updatedAccess });
 }));
 
 router.delete("/applications/:id", wrap(async (req, res) => {
