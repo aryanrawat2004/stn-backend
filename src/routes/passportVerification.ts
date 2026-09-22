@@ -34,12 +34,6 @@ const STEP_DOCUMENTS = {
 type VerificationStep = keyof typeof STEP_DOCUMENTS;
 type StepStatus = "pending" | "submitted" | "under_review" | "verified" | "rejected";
 
-function addMonths(date: Date, months: number) {
-  const result = new Date(date);
-  result.setMonth(result.getMonth() + months);
-  return result;
-}
-
 function statusColumn(step: VerificationStep) {
   return `${step}_status`;
 }
@@ -319,18 +313,17 @@ router.patch("/admin/requests/:verificationId/steps/:step/:decision", async (req
       refreshed.police_status === "verified" &&
       refreshed.payment_status === "paid"
     ) {
-      const validUntil = addMonths(new Date(), 3);
       await supabase.from("candidate_verifications").update({
         status: "verified",
         verified_at: new Date().toISOString(),
-        valid_until: validUntil.toISOString(),
+        valid_until: null,
         updated_at: new Date().toISOString(),
       }).eq("id", verificationId);
 
       if (refreshed.candidate_id) {
         await supabase.from("sn_candidates").update({
           is_verified: true,
-          verification_valid_until: validUntil.toISOString(),
+          verification_valid_until: null,
           verification_priority: 1,
         }).eq("id", refreshed.candidate_id);
       }
@@ -347,7 +340,6 @@ router.patch("/admin/requests/:verificationId/approve", async (req, res) => {
   try {
     if (!supabase) return res.status(503).json({ error: "Database is not configured" });
     const verificationId = req.params.verificationId;
-    const validUntil = addMonths(new Date(), 3);
     const { data: verification, error: verificationError } = await supabase
       .from("candidate_verifications")
       .select("*")
@@ -365,7 +357,7 @@ router.patch("/admin/requests/:verificationId/approve", async (req, res) => {
       employment_verified_at: now,
       police_verified_at: now,
       verified_at: now,
-      valid_until: validUntil.toISOString(),
+      valid_until: null,
       updated_at: now,
     }).eq("id", verificationId).select("*").single();
     if (error) return res.status(500).json({ error: error.message });
@@ -373,7 +365,7 @@ router.patch("/admin/requests/:verificationId/approve", async (req, res) => {
     if (verification.candidate_id) {
       await supabase.from("sn_candidates").update({
         is_verified: true,
-        verification_valid_until: validUntil.toISOString(),
+        verification_valid_until: null,
         verification_priority: 1,
       }).eq("id", verification.candidate_id);
     }
