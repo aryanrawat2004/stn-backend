@@ -23,6 +23,11 @@ type SortMode = "match" | "experience" | "name";
 export type UnifiedTalentItem = SharePointTalentItem & {
   resume_text?: string;
   sourceType?: "solarnaukri" | "sharepoint" | "resume_ai";
+  verified?: boolean;
+  talentPassportScore?: number;
+  noticePeriod?: string;
+  expectedSalary?: string;
+  immediateJoiner?: boolean;
 };
 
 function normalise(value: unknown) {
@@ -87,6 +92,11 @@ async function loadSolarNaukriCandidates(): Promise<UnifiedTalentItem[]> {
         source: "sharepoint" as const,
         resume_text: `${row.role || ""} ${row.about || ""} ${(row.skills || []).join(" ")}`,
         sourceType: "solarnaukri" as const,
+        verified: Boolean(row.is_verified || row.verified),
+        talentPassportScore: Number(row.talentPassportScore || (row.is_verified ? 100 : 0)),
+        noticePeriod: String(row.noticePeriod || row.resumeData?.noticePeriod || ""),
+        expectedSalary: String(row.expectedSalary || row.resumeData?.expectedSalary || ""),
+        immediateJoiner: /immediate|0\s*day|join\s*now/i.test(String(row.noticePeriod || row.resumeData?.noticePeriod || "")),
       })),
     );
   } catch (err: any) {
@@ -359,6 +369,10 @@ router.get("/status", (_req, res) => {
 
 router.get("/folders", async (req, res) => {
   try {
+    const verifiedOnly = String(req.query.verified || "") === "1";
+    const noticePeriod = normalise(req.query.noticePeriod) || "all";
+    const expectedSalary = normalise(req.query.expectedSalary) || "all";
+    const immediateJoinerOnly = String(req.query.immediateJoiner || "") === "1";
     const force = String(req.query.refresh || "") === "1";
     const folders = await listSharePointTalentFolders(force);
     res.json({ data: folders, meta: { total: folders.length, source: "sharepoint" } });
@@ -487,11 +501,23 @@ router.get("/sharepoint", async (req, res) => {
           roleMatch.score + skillsFit.score + expFit.score + workFit.score + locationFit.score + Math.min(10, keywordScore),
         );
 
+        const verifiedBoost = item.verified ? 6 : 0;
+        const sourceBoost = item.sourceType === "solarnaukri" ? 2 : 0;
+        const finalScore = Math.min(100, (hasCriteria ? weightedScore : keywordScore) + verifiedBoost + sourceBoost);
+
         return {
           item,
-          score: hasCriteria ? weightedScore : keywordScore,
-          matchPercent: hasCriteria ? weightedScore : Math.min(100, keywordScore * 5),
-          reasons,
+          score: finalScore,
+          matchPercent: hasCriteria ? finalScore : Math.min(100, finalScore * 5),
+          matchBreakdown: {
+            role: Math.min(100, Math.round((roleMatch.score / 100) * 100)),
+            skills: skills ? Math.min(100, Math.round((skillsFit.score / 25) * 100)) : 0,
+            experience: experience === "all" ? 0 : Math.min(100, Math.round((expFit.score / 15) * 100)),
+            workMode: workType === "all" ? 0 : Math.min(100, Math.round((workFit.score / 8) * 100)),
+            location: location === "all" ? 0 : Math.min(100, Math.round((locationFit.score / 12) * 100)),
+            verifiedTalent: item.verified ? 100 : 0,
+          },
+          reasons: item.verified ? ["Talent Passport verified", ...reasons] : reasons,
           bucket: experienceBucket(item),
           inferredWorkType: inferWorkType(item),
           haystack,
@@ -504,7 +530,11 @@ router.get("/sharepoint", async (req, res) => {
         const matchesWorkType = workType === "all" || inferredWorkType === workType;
         const matchesLocation = location === "all" || haystack.includes(location);
         const matchesRole = (!jobRole && !skills) || score > 0;
-        return matchesSearch && matchesExperience && matchesWorkType && matchesLocation && matchesRole;
+        const matchesVerified = !verifiedOnly || Boolean(item.verified);
+        const matchesNotice = noticePeriod === "all" || normalise(item.noticePeriod).includes(noticePeriod);
+        const matchesSalary = expectedSalary === "all" || normalise(item.expectedSalary).includes(expectedSalary);
+        const matchesImmediate = !immediateJoinerOnly || Boolean(item.immediateJoiner);
+        return matchesSearch && matchesExperience && matchesWorkType && matchesLocation && matchesRole && matchesVerified && matchesNotice && matchesSalary && matchesImmediate;
       });
 
     ranked.sort((a, b) => {
@@ -513,15 +543,17 @@ router.get("/sharepoint", async (req, res) => {
         return (inferExperience(b.item) ?? -1) - (inferExperience(a.item) ?? -1) ||
           a.item.name.localeCompare(b.item.name);
       }
+      if (Boolean(a.item.verified) !== Boolean(b.item.verified)) return a.item.verified ? -1 : 1;
       return b.score - a.score || a.item.name.localeCompare(b.item.name);
     });
 
     const total = ranked.length;
     const selected = limit ? ranked.slice(0, limit) : ranked;
-    const data = selected.map(({ item, score, matchPercent, reasons, inferredWorkType, bucket }) => ({
+    const data = selected.map(({ item, score, matchPercent, matchBreakdown, reasons, inferredWorkType, bucket }) => ({
       ...item,
       matchScore: score,
       matchPercent,
+      matchBreakdown,
       matchReasons: reasons,
       inferredWorkType,
       experienceBucket: bucket,
@@ -538,7 +570,7 @@ router.get("/sharepoint", async (req, res) => {
         folders,
         locations,
         selectedFolder: folder || null,
-        filters: { search, jobRole, skills, experience, workType, location, sort, limit, top },
+        filters: { search, jobRole, skills, experience, workType, location, verifiedOnly, noticePeriod, expectedSalary, immediateJoinerOnly, sort, limit, top },
         source: "resume_screener+sharepoint+solarnaukri",
       },
     });
