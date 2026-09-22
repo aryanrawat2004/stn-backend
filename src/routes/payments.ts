@@ -3,6 +3,12 @@ import crypto from "crypto";
 import Razorpay from "razorpay";
 import { supabase } from "../db";
 import { redeemCoupon, validateCouponForOrder } from "./coupons";
+import {
+  buildPaymentReceiptPdf,
+  createReceiptNumber,
+  sendPaymentReceiptEmail,
+  type ReceiptData,
+} from "../services/payment-receipt";
 
 const router = Router();
 
@@ -19,6 +25,40 @@ const PAID_PLANS = {
 } as const;
 
 type PaidPlanId = keyof typeof PAID_PLANS;
+
+const PLAN_RECEIPT_META: Record<string, { billingLabel: string; highlights: string[] }> = {
+  "single-job": {
+    billingLabel: "One-time payment",
+    highlights: ["1 focused renewable-energy job post", "Relevant candidate reach", "Secure online payment"],
+  },
+  starter: {
+    billingLabel: "1 month",
+    highlights: ["Built for active hiring teams", "Candidate access & hiring tools", "Secure online payment"],
+  },
+  growth: {
+    billingLabel: "1 month",
+    highlights: ["Higher-volume hiring support", "Expanded talent access", "Secure online payment"],
+  },
+  pro: {
+    billingLabel: "3 months",
+    highlights: ["Advanced recruiter access", "Premium talent sourcing", "Secure online payment"],
+  },
+  "pro-plus": {
+    billingLabel: "6 months",
+    highlights: ["Extended premium hiring access", "High-volume recruitment support", "Secure online payment"],
+  },
+  "talent-passport": {
+    billingLabel: "One-time verification",
+    highlights: ["Talent Passport verification", "Verified candidate profile", "Secure online payment"],
+  },
+};
+
+function receiptMeta(planId: string) {
+  return PLAN_RECEIPT_META[planId] || {
+    billingLabel: "Payment",
+    highlights: ["SolarNaukri purchase", "Secure online payment"],
+  };
+}
 
 function getRazorpayConfig() {
   const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
@@ -141,6 +181,8 @@ router.post("/verify-payment", async (req, res) => {
       razorpay_signature,
       planId,
       verificationId,
+      customerName,
+      customerEmail,
     } = req.body || {};
 
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
@@ -167,6 +209,7 @@ router.post("/verify-payment", async (req, res) => {
     }
 
     const order = await razorpayConfig.client.orders.fetch(String(razorpay_order_id));
+    const payment = await razorpayConfig.client.payments.fetch(String(razorpay_payment_id));
     const notes = (order.notes || {}) as Record<string, string>;
     const verifiedPlanId = String(notes.planId || planId || "");
     const verifiedVerificationId = String(notes.verificationId || verificationId || "");
@@ -204,6 +247,38 @@ router.post("/verify-payment", async (req, res) => {
       });
     }
 
+    const paidAt = new Date().toISOString();
+    const meta = receiptMeta(verifiedPlanId);
+    const planName = String(notes.planName || PAID_PLANS[verifiedPlanId as PaidPlanId]?.name || verifiedPlanId || "SolarNaukri Plan");
+    const resolvedEmail = String(customerEmail || (payment as any)?.email || "").trim();
+    const resolvedName = String(customerName || "SolarNaukri Customer").trim();
+    const receipt: ReceiptData = {
+      receiptNo: createReceiptNumber(String(razorpay_payment_id), paidAt),
+      customerName: resolvedName,
+      customerEmail: resolvedEmail,
+      planName,
+      billingLabel: meta.billingLabel,
+      paymentId: String(razorpay_payment_id),
+      orderId: String(razorpay_order_id),
+      paymentMethod: String((payment as any)?.method || "Razorpay"),
+      taxableAmount,
+      gstRate,
+      gstAmount,
+      totalAmount: Number(order.amount || 0),
+      currency: String(order.currency || "INR"),
+      paidAt,
+      highlights: meta.highlights,
+    };
+
+    const receiptPdf = buildPaymentReceiptPdf(receipt);
+    let emailReceiptSent = false;
+    try {
+      const emailResult = await sendPaymentReceiptEmail(receipt, receiptPdf);
+      emailReceiptSent = emailResult.sent;
+    } catch (emailError) {
+      console.error("Payment receipt email error:", emailError);
+    }
+
     return res.json({
       success: true,
       message: "Payment verified successfully",
@@ -216,10 +291,80 @@ router.post("/verify-payment", async (req, res) => {
       gst_amount: gstAmount,
       amount: Number(order.amount),
       currency: order.currency,
+      receipt: {
+        receipt_no: receipt.receiptNo,
+        customer_name: receipt.customerName,
+        customer_email: receipt.customerEmail,
+        plan_name: receipt.planName,
+        billing_label: receipt.billingLabel,
+        payment_method: receipt.paymentMethod,
+        paid_at: receipt.paidAt,
+      },
+      email_receipt_sent: emailReceiptSent,
     });
   } catch (error: any) {
     console.error("Razorpay verify-payment error:", error);
     return res.status(500).json({ error: "Could not verify Razorpay payment" });
+  }
+});
+
+router.post("/receipt-pdf", async (req, res) => {
+  try {
+    const paymentId = String(req.body?.paymentId || "").trim();
+    const orderId = String(req.body?.orderId || "").trim();
+    const customerName = String(req.body?.customerName || "SolarNaukri Customer").trim();
+    const customerEmail = String(req.body?.customerEmail || "").trim();
+
+    if (!paymentId || !orderId) {
+      return res.status(400).json({ error: "Payment ID and Order ID are required" });
+    }
+
+    const razorpayConfig = getRazorpayClient();
+    if (!razorpayConfig) {
+      return res.status(500).json({ error: "Razorpay is not configured on the server" });
+    }
+
+    const [payment, order] = await Promise.all([
+      razorpayConfig.client.payments.fetch(paymentId),
+      razorpayConfig.client.orders.fetch(orderId),
+    ]);
+
+    if (String((payment as any)?.order_id || "") !== orderId) {
+      return res.status(400).json({ error: "Payment does not belong to this order" });
+    }
+
+    const notes = (order.notes || {}) as Record<string, string>;
+    const planId = String(notes.planId || "");
+    const meta = receiptMeta(planId);
+    const paidAt = (payment as any)?.created_at
+      ? new Date(Number((payment as any).created_at) * 1000).toISOString()
+      : new Date().toISOString();
+
+    const receipt: ReceiptData = {
+      receiptNo: createReceiptNumber(paymentId, paidAt),
+      customerName,
+      customerEmail: customerEmail || String((payment as any)?.email || ""),
+      planName: String(notes.planName || PAID_PLANS[planId as PaidPlanId]?.name || planId || "SolarNaukri Plan"),
+      billingLabel: meta.billingLabel,
+      paymentId,
+      orderId,
+      paymentMethod: String((payment as any)?.method || "Razorpay"),
+      taxableAmount: Number(notes.taxableAmount || 0),
+      gstRate: Number(notes.gstRate || GST_PERCENT),
+      gstAmount: Number(notes.gstAmount || 0),
+      totalAmount: Number(order.amount || 0),
+      currency: String(order.currency || "INR"),
+      paidAt,
+      highlights: meta.highlights,
+    };
+
+    const pdf = buildPaymentReceiptPdf(receipt);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="SolarNaukri-Receipt-${receipt.receiptNo}.pdf"`);
+    return res.send(pdf);
+  } catch (error: any) {
+    console.error("Payment receipt PDF error:", error);
+    return res.status(500).json({ error: "Could not generate payment receipt PDF" });
   }
 });
 
