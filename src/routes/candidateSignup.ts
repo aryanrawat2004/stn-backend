@@ -195,6 +195,64 @@ router.post("/signup", upload.single("resume"), async (req, res) => {
   }
 });
 
+router.post("/applications", async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+    const email = clean(req.body?.email).toLowerCase();
+    const jobId = clean(req.body?.jobId);
+    if (!email || !jobId) {
+      return res.status(400).json({ error: "Candidate email and jobId are required" });
+    }
+
+    const { data: candidate, error: candidateError } = await supabase
+      .from("sn_candidates")
+      .select("id,email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (candidateError) throw candidateError;
+    if (!candidate) {
+      return res.status(404).json({ error: "Candidate profile not found. Please complete candidate signup first." });
+    }
+
+    const { data: duplicate, error: duplicateError } = await supabase
+      .from("sn_applications")
+      .select("id,jobId,candidateId,status,appliedAt")
+      .eq("candidateId", candidate.id)
+      .eq("jobId", jobId)
+      .maybeSingle();
+
+    if (duplicateError) throw duplicateError;
+    if (duplicate) {
+      return res.status(409).json({ error: "You have already applied to this job.", data: duplicate });
+    }
+
+    const now = new Date().toISOString();
+    const record = {
+      id: clean(req.body?.id) || `APP-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      jobId,
+      candidateId: String(candidate.id),
+      status: "Applied",
+      appliedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const { data, error } = await supabase
+      .from("sn_applications")
+      .insert(record)
+      .select("*")
+      .single();
+
+    if (error) throw error;
+    return res.status(201).json({ data });
+  } catch (error: any) {
+    console.error("Candidate application persistence failed:", error);
+    return res.status(500).json({ error: error?.message || "Could not save candidate application" });
+  }
+});
+
 router.post("/resume-parse", async (req, res) => {
   try {
     if (!supabase) return res.status(503).json({ error: "Database is not configured" });
