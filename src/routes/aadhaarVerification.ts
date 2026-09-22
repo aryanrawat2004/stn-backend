@@ -25,6 +25,33 @@ function isValidAadhaar(value: string) {
   return c === 0;
 }
 
+
+function extractProviderAddress(provider: Record<string, any>) {
+  const direct = provider.address || provider.full_address || provider.address_text || provider.formatted_address;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  const source = provider.address_data || provider.address_details || provider.kyc?.address || provider.data?.address;
+  if (source && typeof source === "object") {
+    const parts = [
+      source.house,
+      source.building,
+      source.street,
+      source.landmark,
+      source.locality,
+      source.vtc,
+      source.city,
+      source.district,
+      source.state,
+      source.pincode || source.postal_code,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    if (parts.length) return [...new Set(parts)].join(", ");
+  }
+
+  return null;
+}
+
 function stableUuid(input: string) {
   const bytes = crypto.createHash("sha256").update(input.toLowerCase()).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
@@ -235,6 +262,7 @@ router.post("/otp/verify", async (req, res) => {
       verifiedAt: data.verified_at,
       aadhaarLast4: data.aadhaar_last4,
       fullName: data.full_name || null,
+      address: extractProviderAddress(provider),
     });
   } catch (error: any) {
     console.error("Aadhaar OTP verification failed:", error?.message || error);
