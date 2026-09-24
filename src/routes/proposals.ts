@@ -126,6 +126,89 @@ function htmlEscape(value: string) {
     .replace(/'/g, "&#039;");
 }
 
+router.get("/history", wrap(async (_req, res) => {
+  const { supabase } = await import("../db");
+  if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+  const { data, error } = await supabase
+    .from("sn_activities")
+    .select("*")
+    .eq("type", "proposal_sent")
+    .order("createdAt", { ascending: false })
+    .limit(200);
+
+  if (error) throw error;
+
+  const rows = (data || []).map((item: any) => {
+    let meta: any = {};
+    try {
+      meta = JSON.parse(String(item.description || "{}"));
+    } catch {}
+
+    return {
+      id: item.id,
+      clientName: meta.clientName || "",
+      companyName: meta.companyName || "",
+      to: meta.to || "",
+      cc: meta.cc || "",
+      bcc: meta.bcc || "",
+      subject: meta.subject || item.title || "SolarNaukri Proposal",
+      status: meta.status || "Opened in Outlook",
+      createdAt: item.createdAt,
+    };
+  });
+
+  return res.json({
+    data: rows,
+    total: rows.length,
+  });
+}));
+
+router.post("/history", wrap(async (req, res) => {
+  const { supabase } = await import("../db");
+  if (!supabase) return res.status(503).json({ error: "Database is not configured" });
+
+  const to = String(req.body?.to || "").trim();
+  const clientName = String(req.body?.clientName || "").trim();
+  const companyName = String(req.body?.companyName || "").trim();
+  const subject = String(req.body?.subject || "").trim();
+  const cc = String(req.body?.cc || "").trim();
+  const bcc = String(req.body?.bcc || "").trim();
+
+  if (!to || !subject) {
+    return res.status(400).json({ error: "Recipient and subject are required" });
+  }
+
+  const now = new Date().toISOString();
+  const id = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const description = JSON.stringify({
+    clientName,
+    companyName,
+    to,
+    cc,
+    bcc,
+    subject,
+    status: "Opened in Outlook",
+  });
+
+  const { data, error } = await supabase
+    .from("sn_activities")
+    .insert({
+      id,
+      type: "proposal_sent",
+      title: subject,
+      description,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .select("*")
+    .single();
+
+  if (error) throw error;
+
+  return res.status(201).json({ success: true, data });
+}));
+
 router.post("/send", wrap(async (req, res) => {
   const to = splitEmails(req.body?.to);
   const cc = splitEmails(req.body?.cc);
