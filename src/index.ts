@@ -29,6 +29,7 @@ import pricingRouter from "./routes/pricing";
 import paymentsRouter from "./routes/payments";
 import cvUsageRouter from "./routes/cvUsage";
 import { couponsAdminRouter, couponsPublicRouter } from "./routes/coupons";
+import proposalsRouter from "./routes/proposals";
 import { resourcesAdminRouter, resourcesPublicRouter } from "./routes/resources";
 import { requireWriteRoles } from "./middleware/rbac";
 
@@ -71,6 +72,7 @@ app.use("/api/admin/resources", adminWriteGuard, resourcesAdminRouter);
 app.use("/api/admin/coupons", adminWriteGuard, couponsAdminRouter);
 app.use("/api/admin/candidates", adminWriteGuard, candidatesRouter);
 app.use("/api/admin/job-seekers", adminWriteGuard, candidatesRouter);
+app.use("/api/admin/proposals", adminWriteGuard, proposalsRouter);
 app.use("/api/admin/employers", adminWriteGuard, employersRouter);
 app.use("/api/admin/Employers", adminWriteGuard, employersRouter);
 app.use("/api/admin/companies", adminWriteGuard, companiesRouter);
