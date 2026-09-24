@@ -103,8 +103,9 @@ app.get("/health/schema", async (_req, res) => {
   const requiredTables: Record<string, string> = {
     sn_jobs: 'id,role,company,location,type,status,createdAt,updatedAt',
     sn_candidates: 'id,name,email,phone,role,location,accountStatus,profileCompletion,resumeStrength,talentPassportScore,currentSalary,expectedSalary,noticePeriod,about,resumeUrl,resumeName,firebaseUid,createdAt,updatedAt',
-    sn_employers: 'id,companyName,contactPerson,email,location,status,createdAt,updatedAt',
-    sn_companies: 'id,companyName,industry,location,email,phone,verificationStatus,accountStatus,createdAt,updatedAt',
+    sn_employers: 'id,companyName,contactPerson,email,location,jobsPosted,verified,joinedDate,status,authUid,accountScope,createdAt,updatedAt',
+    sn_companies: 'id,companyName,industry,location,website,contactPerson,email,phone,jobsPosted,verified,status,joinedDate,companyType,companySize,foundedYear,description,designation,alternatePhone,address,city,state,country,pinCode,gstNumber,cinNumber,pan,msmeRegistered,solarExpertise,verificationStatus,accountStatus,createdAt,updatedAt',
+    company_profiles: 'id,owner_email,company_name,website,industry,company_size,headquarters,about,contact_name,contact_email,contact_phone,created_at,updated_at',
     sn_categories: 'id,name,slug,description,status,createdAt,updatedAt',
     sn_ambassadors: 'id,name,email,phone,college,city,status,createdAt,updatedAt',
     sn_applications: 'id,jobId,candidateId,status,appliedAt,createdAt,updatedAt',
