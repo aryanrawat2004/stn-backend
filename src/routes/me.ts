@@ -128,11 +128,71 @@ function calculateMatch(candidate: Record<string, any>, job: Record<string, any>
 }
 
 async function withSignedResume(candidate: Record<string, any> | null) {
-  if (!candidate || !supabase || !candidate.resumePath) return candidate;
-  const { data } = await supabase.storage
-    .from("candidate-resumes")
-    .createSignedUrl(String(candidate.resumePath), 60 * 60);
-  return { ...candidate, resumeUrl: data?.signedUrl || null };
+  if (!candidate || !supabase) return candidate;
+
+  const bucket = supabase.storage.from("candidate-resumes");
+  let resumePath = String(candidate.resumePath || "").trim();
+  let resumeLookupError = "";
+
+  // Legacy recovery: some candidate rows contain resumeName but not resumePath.
+  // Look inside the candidate folder and recover the actual uploaded object.
+  if (!resumePath && candidate.id && candidate.resumeName) {
+    try {
+      const folder = String(candidate.id);
+      const listed = await bucket.list(folder, { limit: 100, sortBy: { column: "created_at", order: "desc" } });
+      if (listed.error) {
+        resumeLookupError = listed.error.message;
+      } else {
+        const wanted = String(candidate.resumeName || "").replace(/[^a-zA-Z0-9._-]/g, "-").toLowerCase();
+        const files = (listed.data || []).filter((item: any) => item?.name);
+        const exact = files.find((item: any) => String(item.name).toLowerCase() === wanted);
+        const suffix = files.find((item: any) => String(item.name).toLowerCase().endsWith(`-${wanted}`));
+        const match = exact || suffix || files.find((item: any) => String(item.name).toLowerCase().includes(wanted));
+        if (match?.name) resumePath = `${folder}/${match.name}`;
+      }
+    } catch (error: any) {
+      resumeLookupError = error?.message || "Resume lookup failed";
+    }
+  }
+
+  if (!resumePath) {
+    return {
+      ...candidate,
+      resumeUrl: null,
+      resumeAvailable: false,
+      resumeLookupError: resumeLookupError || null,
+    };
+  }
+
+  const signed = await bucket.createSignedUrl(resumePath, 60 * 60);
+  if (signed.error || !signed.data?.signedUrl) {
+    return {
+      ...candidate,
+      resumePath,
+      resumeUrl: null,
+      resumeAvailable: false,
+      resumeLookupError: signed.error?.message || resumeLookupError || "Resume file could not be signed",
+    };
+  }
+
+  // Persist a recovered legacy resumePath so future reads do not need storage listing.
+  if (!candidate.resumePath && candidate.id) {
+    await supabase
+      .from("sn_candidates")
+      .update({ resumePath, updatedAt: new Date().toISOString() })
+      .eq("id", candidate.id)
+      .then(({ error }) => {
+        if (error) console.warn("Could not persist recovered resumePath:", error.message);
+      });
+  }
+
+  return {
+    ...candidate,
+    resumePath,
+    resumeUrl: signed.data.signedUrl,
+    resumeAvailable: true,
+    resumeLookupError: null,
+  };
 }
 
 async function ensureCandidate(auth: AuthContext) {
