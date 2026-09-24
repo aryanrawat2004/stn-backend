@@ -1086,12 +1086,16 @@ router.get("/Employer/applications", wrap(async (req, res) => {
     }
   }
 
-  return res.json({
-    data: applicationData.map((item: any) => ({
+  const enrichedApplications = await Promise.all(
+    applicationData.map(async (item: any) => ({
       ...item,
       job: jobsById.get(String(item.jobId)) || null,
-      candidate: byCandidate.get(String(item.candidateId)) || null,
+      candidate: await withSignedResume(byCandidate.get(String(item.candidateId)) || null),
     })),
+  );
+
+  return res.json({
+    data: enrichedApplications,
     employer: employer || null,
     debug: {
       companyName,
