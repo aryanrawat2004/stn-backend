@@ -489,9 +489,56 @@ router.post("/applications", wrap(async (req, res) => {
   const jobId = String(req.body?.jobId || "").trim();
   if (!jobId) return res.status(400).json({ error: "jobId is required" });
 
-  const jobCheck = await supabase!.from("sn_jobs").select("id,status").eq("id", jobId).maybeSingle();
+  const jobCheck = await supabase!.from("sn_jobs").select("*").eq("id", jobId).maybeSingle();
   if (jobCheck.error) throw jobCheck.error;
   if (!jobCheck.data || jobCheck.data.status !== "Active") return res.status(404).json({ error: "Active job not found" });
+
+  // Resolve the employer that owns this job now, so every new application is
+  // permanently linked to that employer instead of relying only on company text.
+  let applicationEmployerEmail = String(
+    jobCheck.data.EmployerEmail ||
+    jobCheck.data.applicationEmail ||
+    jobCheck.data.employerEmail ||
+    ""
+  ).trim().toLowerCase();
+
+  if (!applicationEmployerEmail && jobCheck.data.company) {
+    const companyName = String(jobCheck.data.company || "").trim();
+    const exactCompany = await supabase!
+      .from("sn_companies")
+      .select("email,companyName")
+      .eq("companyName", companyName)
+      .limit(1)
+      .maybeSingle();
+
+    if (!exactCompany.error && exactCompany.data?.email) {
+      applicationEmployerEmail = String(exactCompany.data.email).trim().toLowerCase();
+    } else {
+      const companies = await supabase!
+        .from("sn_companies")
+        .select("email,companyName")
+        .limit(500);
+
+      if (!companies.error) {
+        const target = normalizeCompanyIdentity(companyName);
+        const matchedCompany = (companies.data || []).find((company: any) => {
+          const current = normalizeCompanyIdentity(company.companyName);
+          return Boolean(
+            target &&
+            current &&
+            (current === target || current.includes(target) || target.includes(current))
+          );
+        });
+        if (matchedCompany?.email) {
+          applicationEmployerEmail = String(matchedCompany.email).trim().toLowerCase();
+        }
+      }
+    }
+  }
+
+  const applicationEmployerScope = applicationEmployerEmail
+    ? `employer:${applicationEmployerEmail}`
+    : null;
 
   const existing = await supabase!
     .from("sn_applications")
@@ -518,6 +565,8 @@ router.post("/applications", wrap(async (req, res) => {
       id: `APP-${randomUUID().slice(0, 8).toUpperCase()}`,
       candidateId: candidate.id,
       jobId,
+      employerEmail: applicationEmployerEmail || null,
+      employerScope: applicationEmployerScope,
       status: "Applied",
       appliedAt: now,
       createdAt: now,
@@ -742,19 +791,53 @@ router.patch("/Employer/applications/:applicationId", wrap(async (req, res) => {
     return res.status(400).json({ error: "Invalid application status" });
   }
 
-  const jobsResult = await supabase!.from("sn_jobs").select("id").eq("company", Employer.companyName).limit(200);
-  if (jobsResult.error) throw jobsResult.error;
-  const ownedJobIds = (jobsResult.data || []).map((job: any) => job.id);
-  if (!ownedJobIds.length) return res.status(404).json({ error: "Application not found" });
-
   const existing = await supabase!
     .from("sn_applications")
     .select("*")
     .eq("id", req.params.applicationId)
-    .in("jobId", ownedJobIds)
     .maybeSingle();
+
   if (existing.error) throw existing.error;
   if (!existing.data) return res.status(404).json({ error: "Application not found" });
+
+  const normalizedAuthEmail = String(auth.email || "").trim().toLowerCase();
+  const authScopes = new Set(
+    [
+      auth.uid ? `employer:${String(auth.uid).toLowerCase()}` : "",
+      normalizedAuthEmail ? `employer:${normalizedAuthEmail}` : "",
+    ].filter(Boolean),
+  );
+
+  const linkedEmail = String(existing.data.employerEmail || "").trim().toLowerCase();
+  const linkedScope = String(existing.data.employerScope || "").trim().toLowerCase();
+
+  let ownsApplication =
+    Boolean(linkedEmail && linkedEmail === normalizedAuthEmail) ||
+    Boolean(linkedScope && authScopes.has(linkedScope));
+
+  if (!ownsApplication) {
+    const linkedJob = await supabase!
+      .from("sn_jobs")
+      .select("*")
+      .eq("id", existing.data.jobId)
+      .maybeSingle();
+
+    if (linkedJob.error) throw linkedJob.error;
+
+    const employerCompany = normalizeCompanyIdentity(Employer.companyName);
+    const jobCompany = normalizeCompanyIdentity(linkedJob.data?.company);
+    ownsApplication = Boolean(
+      employerCompany &&
+      jobCompany &&
+      (jobCompany === employerCompany ||
+        jobCompany.includes(employerCompany) ||
+        employerCompany.includes(jobCompany))
+    );
+  }
+
+  if (!ownsApplication) {
+    return res.status(404).json({ error: "Application not found" });
+  }
 
   const patch: Record<string, unknown> = {
     updatedAt: new Date().toISOString(),
@@ -763,14 +846,23 @@ router.patch("/Employer/applications/:applicationId", wrap(async (req, res) => {
   if (req.body?.notes !== undefined) patch.notes = notes;
   if (tags !== undefined) patch.tags = tags;
 
+  // Backfill direct ownership whenever a legacy application is successfully
+  // accessed by its real employer.
+  if (!existing.data.employerEmail) patch.employerEmail = auth.email;
+  if (!existing.data.employerScope) {
+    patch.employerScope = auth.uid
+      ? `employer:${String(auth.uid).toLowerCase()}`
+      : `employer:${normalizedAuthEmail}`;
+  }
+
   const { data, error } = await supabase!
     .from("sn_applications")
     .update(patch)
     .eq("id", req.params.applicationId)
     .select("*")
     .single();
-  if (error) throw error;
 
+  if (error) throw error;
   return res.json({ data });
 }));
 
@@ -919,12 +1011,26 @@ router.get("/Employer/applications", wrap(async (req, res) => {
 
   const ownedJobIds = new Set(ownedJobs.map((job: any) => String(job.id)));
 
+  const employerScopeCandidates = new Set(
+    [
+      auth.uid ? `employer:${String(auth.uid).toLowerCase()}` : "",
+      auth.email ? `employer:${String(auth.email).toLowerCase()}` : "",
+    ].filter(Boolean),
+  );
+  const normalizedAuthEmail = String(auth.email || "").trim().toLowerCase();
+
   const applicationData = (applicationsResult.data || []).filter((application: any) => {
+    const applicationEmail = String(application.employerEmail || "").trim().toLowerCase();
+    const applicationScope = String(application.employerScope || "").trim().toLowerCase();
+
+    // Preferred source of truth for all newly-created applications.
+    if (applicationEmail && applicationEmail === normalizedAuthEmail) return true;
+    if (applicationScope && employerScopeCandidates.has(applicationScope)) return true;
+
+    // Legacy fallback for old rows created before employer ownership was saved.
     const jobId = String(application.jobId || "");
     if (ownedJobIds.has(jobId)) return true;
 
-    // Extra legacy recovery: if the app points to a job that exists, compare
-    // that linked job's company directly even if it was not captured above.
     const linkedJob = jobsById.get(jobId);
     const linkedCompany = normalizeCompanyIdentity(linkedJob?.company);
     return Boolean(
