@@ -1212,6 +1212,16 @@ router.put("/Employer/company", wrap(async (req, res) => {
     return res.status(400).json({ error: "Company name, industry, location and description are required" });
   }
 
+  const rawPhone = String(req.body?.phone ?? req.body?.contactPhone ?? "").trim();
+  let phoneDigits = rawPhone.replace(/\D/g, "");
+  if (phoneDigits.startsWith("91") && phoneDigits.length === 12) {
+    phoneDigits = phoneDigits.slice(2);
+  }
+  if (rawPhone && !/^\d{10}$/.test(phoneDigits)) {
+    return res.status(400).json({ error: "Contact phone must contain exactly 10 digits" });
+  }
+  const normalizedPhone = phoneDigits ? `+91${phoneDigits}` : "";
+
   const existingEmployer = await ensureEmployer(auth);
   const existingCompanyByEmail = await supabase!
     .from("sn_companies")
@@ -1225,9 +1235,11 @@ router.put("/Employer/company", wrap(async (req, res) => {
   const companyId = String(existingCompanyByEmail.data?.id || `company-${auth.uid || auth.email}`);
   const employerId = String(existingEmployer?.id || `employer-${auth.uid || auth.email}`);
 
-  const companyRecord = {
+  // Do not spread req.body into the database record. The frontend can evolve
+  // faster than the production schema and unknown fields make PostgREST reject
+  // the entire upsert with a 500. Keep this payload intentionally explicit.
+  const companyRecord: Record<string, unknown> = {
     ...(existingCompanyByEmail.data || {}),
-    ...req.body,
     id: companyId,
     companyName,
     industry,
@@ -1243,13 +1255,58 @@ router.put("/Employer/company", wrap(async (req, res) => {
     createdAt: existingCompanyByEmail.data?.createdAt || now,
   };
 
-  const { data: company, error: companyError } = await supabase!
+  if (req.body?.website !== undefined) companyRecord.website = String(req.body.website || "").trim();
+  if (req.body?.companySize !== undefined) companyRecord.companySize = String(req.body.companySize || "").trim();
+  if (req.body?.headquarters !== undefined) companyRecord.headquarters = String(req.body.headquarters || "").trim();
+  if (rawPhone) companyRecord.phone = normalizedPhone;
+
+  let companyResult = await supabase!
     .from("sn_companies")
     .upsert(companyRecord, { onConflict: "id" })
     .select("*")
     .single();
-  if (companyError) throw companyError;
 
+  // Some older production schemas do not yet have the optional phone/company
+  // fields. Retry the core profile update instead of turning a successful
+  // company save into an Internal Server Error.
+  if (companyResult.error) {
+    const message = String(companyResult.error.message || "");
+    const schemaMismatch = /column|schema cache|does not exist/i.test(message);
+
+    if (!schemaMismatch) throw companyResult.error;
+
+    console.warn("Company optional fields are not available in the current schema; retrying core profile save:", message);
+
+    const coreCompanyRecord = {
+      ...(existingCompanyByEmail.data || {}),
+      id: companyId,
+      companyName,
+      industry,
+      location,
+      description,
+      email: auth.email,
+      contactPerson: String(req.body?.contactPerson || auth.name || auth.email.split("@")[0]).trim(),
+      verified: Boolean(existingCompanyByEmail.data?.verified),
+      verificationStatus: String(existingCompanyByEmail.data?.verificationStatus || "Pending"),
+      status: String(existingCompanyByEmail.data?.status || "Pending"),
+      accountStatus: String(existingCompanyByEmail.data?.accountStatus || "Active"),
+      updatedAt: now,
+      createdAt: existingCompanyByEmail.data?.createdAt || now,
+    };
+
+    companyResult = await supabase!
+      .from("sn_companies")
+      .upsert(coreCompanyRecord, { onConflict: "id" })
+      .select("*")
+      .single();
+  }
+
+  if (companyResult.error) throw companyResult.error;
+  const company = companyResult.data;
+
+  // Keep the legacy employer table in sync, but only use columns that are
+  // already part of the established employer model. New auth metadata fields
+  // caused production 500s on deployments where those columns were absent.
   const employerRecord = {
     ...(existingEmployer || {}),
     id: employerId,
@@ -1261,22 +1318,25 @@ router.put("/Employer/company", wrap(async (req, res) => {
     verified: Boolean(existingEmployer?.verified || existingCompanyByEmail.data?.verified),
     joinedDate: String(existingEmployer?.joinedDate || req.body?.joinedDate || new Date().toISOString().slice(0, 10)),
     status: String(existingEmployer?.status || existingCompanyByEmail.data?.verificationStatus || "Pending"),
-    authUid: auth.uid || existingEmployer?.authUid || null,
-    accountScope: auth.uid
-      ? `employer:${String(auth.uid).toLowerCase()}`
-      : `employer:${String(auth.email).toLowerCase()}`,
     updatedAt: now,
     createdAt: existingEmployer?.createdAt || now,
   };
 
-  const { data: employer, error: employerError } = await supabase!
+  const employerResult = await supabase!
     .from("sn_employers")
     .upsert(employerRecord, { onConflict: "id" })
     .select("*")
     .single();
-  if (employerError) throw employerError;
 
-  return res.json({ data: company, employer });
+  if (employerResult.error) {
+    console.warn("Employer sync failed after company profile save:", employerResult.error.message);
+  }
+
+  return res.json({
+    data: company,
+    employer: employerResult.data || existingEmployer || employerRecord,
+    phone: normalizedPhone || null,
+  });
 }));
 
 export default router;
