@@ -1261,6 +1261,10 @@ router.put("/Employer/company", wrap(async (req, res) => {
     verified: Boolean(existingEmployer?.verified || existingCompanyByEmail.data?.verified),
     joinedDate: String(existingEmployer?.joinedDate || req.body?.joinedDate || new Date().toISOString().slice(0, 10)),
     status: String(existingEmployer?.status || existingCompanyByEmail.data?.verificationStatus || "Pending"),
+    authUid: auth.uid || existingEmployer?.authUid || null,
+    accountScope: auth.uid
+      ? `employer:${String(auth.uid).toLowerCase()}`
+      : `employer:${String(auth.email).toLowerCase()}`,
     updatedAt: now,
     createdAt: existingEmployer?.createdAt || now,
   };
