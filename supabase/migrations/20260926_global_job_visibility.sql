@@ -2,9 +2,12 @@
 -- Safe to run more than once.
 
 alter table public.sn_jobs
+  add column if not exists "EmployerEmail" text,
   add column if not exists "ownerId" text,
   add column if not exists "postingPlanId" text default 'free',
-  add column if not exists "expiresAt" timestamptz;
+  add column if not exists "expiresAt" timestamptz,
+  add column if not exists "applicationEmail" text,
+  add column if not exists "updatedAt" timestamptz default now();
 
 update public.sn_jobs
 set "postingPlanId" = coalesce(nullif("postingPlanId", ''), 'free')
@@ -15,7 +18,12 @@ update public.sn_jobs
 set "expiresAt" = coalesce("createdAt", now()) + interval '5 days'
 where "postingPlanId" = 'free'
   and "expiresAt" is null
-  and status = 'Active';
+  and lower(coalesce(status, '')) = 'active';
+
+-- Normalize old statuses if any lowercase values exist.
+update public.sn_jobs
+set status = 'Active'
+where lower(coalesce(status, '')) = 'active';
 
 create index if not exists idx_sn_jobs_status
   on public.sn_jobs(status);
@@ -28,11 +36,6 @@ create index if not exists idx_sn_jobs_owner_id
 
 create index if not exists idx_sn_jobs_expires_at
   on public.sn_jobs("expiresAt");
-
--- Normalize old statuses if any lowercase values exist.
-update public.sn_jobs
-set status = 'Active'
-where lower(coalesce(status, '')) = 'active';
 
 -- Quick verification
 select
