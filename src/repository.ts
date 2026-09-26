@@ -38,6 +38,19 @@ export async function listEntities(table: string, _fallback: Entity[], options: 
 
   if (options.status) rows = rows.filter((item) => String(item.status) === options.status);
 
+  // Public job listings must not surface expired free postings. This keeps the
+  // shared /api/jobs catalog consistent for every candidate, regardless of
+  // which employer created the job.
+  if (resolveTableName(table) === "sn_jobs") {
+    const now = Date.now();
+    rows = rows.filter((item) => {
+      const expiresAt = item.expiresAt;
+      if (!expiresAt) return true;
+      const timestamp = new Date(String(expiresAt)).getTime();
+      return Number.isNaN(timestamp) || timestamp > now;
+    });
+  }
+
   if (options.sort) {
     const [field, direction = "asc"] = options.sort.split(":");
     rows.sort((a, b) => {
@@ -50,7 +63,7 @@ export async function listEntities(table: string, _fallback: Entity[], options: 
   }
 
   const page = Math.max(1, options.page || 1);
-  const limit = Math.min(100, Math.max(1, options.limit || 50));
+  const limit = Math.min(200, Math.max(1, options.limit || 50));
   const start = (page - 1) * limit;
 
   return {
